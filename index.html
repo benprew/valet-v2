@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>V.A.L.E.T.</title>
+    <link rel="stylesheet" href="/index.css">
+</head>
+
+<body>
+    <main class="app-shell">
+        <header class="masthead">
+            <div>
+                <h1>V.A.L.E.T.</h1>
+                <p>Associate an account with devices visible on the local network.</p>
+            </div>
+            {{if .Email}}
+            <form action="/logout" method="post">
+                <input type="hidden" name="csrfToken" value="{{.CSRFToken}}">
+                <button class="secondary" type="submit">Log out</button>
+            </form>
+            {{end}}
+        </header>
+
+        {{if .Error}}
+        <div class="notice" role="alert">{{.Error}}</div>
+        {{end}}
+
+        {{if .Email}}
+        <section>
+            <div class="section-header">
+                <div>
+                    <h2>Devices for {{.Email}}</h2>
+                    <p>{{len .MacAddresses}} registered MAC addresses</p>
+                </div>
+                <div class="header-actions">
+                    {{if .HubAuthorized}}
+                    <span class="auth-status">Hub authorized{{if .LastHubVisit}} | last marked {{.LastHubVisit}}{{end}}</span>
+                    {{else if .OAuthConfigured}}
+                    <form action="/oauth/start" method="post">
+                        <input type="hidden" name="csrfToken" value="{{.CSRFToken}}">
+                        <button type="submit">Authorize Hub access</button>
+                    </form>
+                    {{else}}
+                    <span class="auth-status">OAuth is not configured</span>
+                    {{end}}
+                    <form action="/account" method="get">
+                        <button class="secondary" type="submit">Refresh scan</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="content-grid">
+                <section class="panel">
+                    <h3>Discovered Devices</h3>
+                    {{if .Devices}}
+                    <p class="status">{{len .Devices}} devices found</p>
+                    <div class="device-list">
+                        {{range .Devices}}
+                        <article class="device-row">
+                            <div>
+                                <strong>{{.MAC}}</strong>
+                                <span>{{.IP}}{{if .Interface}} | dev {{.Interface}}{{end}}{{if .State}} | {{.State}}{{end}}</span>
+                            </div>
+                            {{if .Registered}}
+                            <button type="button" disabled>Associated</button>
+                            {{else}}
+                            <form action="/mac-address" method="post">
+                                <input type="hidden" name="csrfToken" value="{{$.CSRFToken}}">
+                                <input type="hidden" name="macAddress" value="{{.MAC}}">
+                                <button type="submit">Associate</button>
+                            </form>
+                            {{end}}
+                        </article>
+                        {{end}}
+                    </div>
+                    {{else}}
+                    <p class="status">No devices found. The neighbor table only includes devices this host has recently seen.</p>
+                    {{end}}
+                </section>
+
+                <section class="panel">
+                    <h3>Registered MAC Addresses</h3>
+                    <form action="/mac-address" method="post">
+                        <input type="hidden" name="csrfToken" value="{{.CSRFToken}}">
+                        <label for="macAddress">Add manually</label>
+                        <div class="inline-form">
+                            <input type="text" id="macAddress" name="macAddress" placeholder="00:00:00:00:00:00"
+                                pattern="([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})" required>
+                            <button type="submit">Add</button>
+                        </div>
+                    </form>
+
+                    <ul class="mac-list">
+                        {{if .MacAddresses}}
+                        {{range .MacAddresses}}
+                        <li>
+                            <code>{{.}}</code>
+                            <form action="/mac-address/delete" method="post">
+                                <input type="hidden" name="csrfToken" value="{{$.CSRFToken}}">
+                                <input type="hidden" name="macAddress" value="{{.}}">
+                                <button class="danger" type="submit">Remove</button>
+                            </form>
+                        </li>
+                        {{end}}
+                        {{else}}
+                        <li class="empty-state">No MAC addresses registered yet.</li>
+                        {{end}}
+                    </ul>
+                </section>
+            </div>
+        </section>
+        {{else}}
+        <section class="panel">
+            <h2>Login</h2>
+            <form action="/login" method="post" autocomplete="off">
+                <label for="email">Email address</label>
+                <div class="inline-form">
+                    <input type="email" id="email" name="email" placeholder="you@example.com" required>
+                    <button type="submit">Continue</button>
+                </div>
+            </form>
+        </section>
+        {{end}}
+    </main>
+</body>
+
+</html>

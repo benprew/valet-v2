@@ -1,0 +1,8 @@
+- [] Add SSH oauth authentication (for debugging)
+- [] Add walkout song support (need speaker)
+
+
+10.100.0
+10.100.4
+10.100.2
+10.100.3
