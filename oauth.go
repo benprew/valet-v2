@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 )
@@ -41,24 +40,24 @@ type oauthToken struct {
 }
 
 func oauthConfigFromRequest(r *http.Request) oauthConfig {
-	redirectURL := os.Getenv("VALET_OAUTH_REDIRECT_URL")
+	redirectURL := conf.OAuthRedirectURL
 	if redirectURL == "" && r != nil {
 		redirectURL = inferOAuthRedirectURL(r)
 	}
 
 	cfg := oauthConfig{
-		ClientID:     os.Getenv("VALET_OAUTH_CLIENT_ID"),
-		ClientSecret: os.Getenv("VALET_OAUTH_CLIENT_SECRET"),
-		AuthorizeURL: strings.TrimSpace(os.Getenv("VALET_OAUTH_AUTHORIZE_URL")),
-		TokenURL:     strings.TrimSpace(os.Getenv("VALET_OAUTH_TOKEN_URL")),
+		ClientID:     conf.OAuthClientID,
+		ClientSecret: conf.OAuthClientSecret,
+		AuthorizeURL: strings.TrimSpace(conf.OAuthAuthorizeURL),
+		TokenURL:     strings.TrimSpace(conf.OAuthTokenURL),
 		RedirectURL:  redirectURL,
-		Scope:        strings.TrimSpace(os.Getenv("VALET_OAUTH_SCOPE")),
+		Scope:        strings.TrimSpace(conf.OAuthScope),
 	}
 	if cfg.AuthorizeURL == "" {
-		cfg.AuthorizeURL = rcBaseURLFromEnv() + "/oauth/authorize"
+		cfg.AuthorizeURL = rcBaseURL() + "/oauth/authorize"
 	}
 	if cfg.TokenURL == "" {
-		cfg.TokenURL = rcBaseURLFromEnv() + "/oauth/token"
+		cfg.TokenURL = rcBaseURL() + "/oauth/token"
 	}
 	return cfg
 }
@@ -69,13 +68,13 @@ func (c oauthConfig) configured() bool {
 
 func (c oauthConfig) validate() error {
 	if c.ClientID == "" {
-		return errors.New("VALET_OAUTH_CLIENT_ID is not set")
+		return errors.New("-oauth-client-id is not set")
 	}
 	if c.ClientSecret == "" {
-		return errors.New("VALET_OAUTH_CLIENT_SECRET is not set")
+		return errors.New("-oauth-client-secret is not set")
 	}
 	if c.RedirectURL == "" {
-		return errors.New("VALET_OAUTH_REDIRECT_URL could not be inferred")
+		return errors.New("OAuth redirect URL could not be inferred; set -oauth-redirect-url")
 	}
 	if c.AuthorizeURL == "" {
 		return errors.New("OAuth authorize URL is not set")
@@ -88,10 +87,10 @@ func (c oauthConfig) validate() error {
 
 func (c oauthConfig) validateRefresh() error {
 	if c.ClientID == "" {
-		return errors.New("VALET_OAUTH_CLIENT_ID is not set")
+		return errors.New("-oauth-client-id is not set")
 	}
 	if c.ClientSecret == "" {
-		return errors.New("VALET_OAUTH_CLIENT_SECRET is not set")
+		return errors.New("-oauth-client-secret is not set")
 	}
 	if c.TokenURL == "" {
 		return errors.New("OAuth token URL is not set")

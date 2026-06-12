@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"time"
 	_ "time/tzdata"
 )
@@ -20,20 +19,10 @@ type hubMonitorConfig struct {
 	Interval time.Duration
 }
 
-func hubMonitorConfigFromEnv() hubMonitorConfig {
-	interval := defaultHubCheckInterval
-	if raw := os.Getenv("VALET_HUB_CHECK_INTERVAL"); raw != "" {
-		parsed, err := time.ParseDuration(raw)
-		if err != nil {
-			log.Printf("invalid VALET_HUB_CHECK_INTERVAL %q, using %s", raw, interval)
-		} else if parsed > 0 {
-			interval = parsed
-		}
-	}
-
+func currentHubMonitorConfig() hubMonitorConfig {
 	return hubMonitorConfig{
-		BaseURL:  rcBaseURLFromEnv(),
-		Interval: interval,
+		BaseURL:  rcBaseURL(),
+		Interval: conf.HubCheckInterval,
 	}
 }
 
@@ -157,7 +146,7 @@ func (s *accountStore) cacheRCProfileID(email, rcProfileID string) error {
 }
 
 func (s *accountStore) cacheAuthorizedRCProfileID(ctx context.Context, email, accessToken string) error {
-	client := newHubVisitClient(hubMonitorConfigFromEnv()).withToken(accessToken)
+	client := newHubVisitClient(currentHubMonitorConfig()).withToken(accessToken)
 	rcProfileID, err := client.findRCProfileID(ctx, email)
 	if err != nil {
 		return err

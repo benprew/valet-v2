@@ -226,7 +226,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	profile, err := newHubVisitClient(hubMonitorConfigFromEnv()).withToken(token.AccessToken).authenticatedRCProfile(ctx)
+	profile, err := newHubVisitClient(currentHubMonitorConfig()).withToken(token.AccessToken).authenticatedRCProfile(ctx)
 	if err != nil {
 		data := s.pageData(r.Context(), state.Email)
 		data.Error = "Could not verify OAuth account: " + err.Error()

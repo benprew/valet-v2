@@ -50,7 +50,9 @@ func TestOAuthAuthorizeURLIncludesRequiredParameters(t *testing.T) {
 }
 
 func TestOAuthConfigUsesRCBaseURL(t *testing.T) {
-	t.Setenv("VALET_RC_BASE_URL", "https://rc.example.test/")
+	setTestConfig(t, func(c *appConfig) {
+		c.RCBaseURL = "https://rc.example.test/"
+	})
 
 	cfg := oauthConfigFromRequest(nil)
 

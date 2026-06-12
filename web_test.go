@@ -258,10 +258,12 @@ func TestOAuthCallbackSavesTokenForMatchingAuthenticatedEmail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("VALET_OAUTH_CLIENT_ID", "client-id")
-	t.Setenv("VALET_OAUTH_CLIENT_SECRET", "client-secret")
-	t.Setenv("VALET_OAUTH_TOKEN_URL", server.URL+"/oauth/token")
-	t.Setenv("VALET_RC_BASE_URL", server.URL)
+	setTestConfig(t, func(c *appConfig) {
+		c.OAuthClientID = "client-id"
+		c.OAuthClientSecret = "client-secret"
+		c.OAuthTokenURL = server.URL + "/oauth/token"
+		c.RCBaseURL = server.URL
+	})
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login/complete?state="+url.QueryEscape(state)+"&code=auth-code", nil)
@@ -319,10 +321,12 @@ func TestOAuthCallbackRejectsMismatchedAuthenticatedEmail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("VALET_OAUTH_CLIENT_ID", "client-id")
-	t.Setenv("VALET_OAUTH_CLIENT_SECRET", "client-secret")
-	t.Setenv("VALET_OAUTH_TOKEN_URL", server.URL+"/oauth/token")
-	t.Setenv("VALET_RC_BASE_URL", server.URL)
+	setTestConfig(t, func(c *appConfig) {
+		c.OAuthClientID = "client-id"
+		c.OAuthClientSecret = "client-secret"
+		c.OAuthTokenURL = server.URL + "/oauth/token"
+		c.RCBaseURL = server.URL
+	})
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login/complete?state="+url.QueryEscape(state)+"&code=auth-code", nil)

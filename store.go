@@ -25,13 +25,6 @@ type accountStore struct {
 	oauthStates  map[string]oauthState
 }
 
-func dataPath() string {
-	if path := os.Getenv("VALET_DATA"); path != "" {
-		return path
-	}
-	return filepath.Join("data", "accounts.db")
-}
-
 func openStore(path string) (*accountStore, error) {
 	store := newAccountStore(path)
 	dbExisted := true

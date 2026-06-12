@@ -180,9 +180,11 @@ func TestHubMonitorRefreshesExpiredOAuthToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("VALET_OAUTH_CLIENT_ID", "client-id")
-	t.Setenv("VALET_OAUTH_CLIENT_SECRET", "client-secret")
-	t.Setenv("VALET_OAUTH_TOKEN_URL", server.URL+"/oauth/token")
+	setTestConfig(t, func(c *appConfig) {
+		c.OAuthClientID = "client-id"
+		c.OAuthClientSecret = "client-secret"
+		c.OAuthTokenURL = server.URL + "/oauth/token"
+	})
 
 	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
 	defer restoreScanner()
@@ -230,12 +232,18 @@ func TestHubMonitorRefreshesExpiredOAuthToken(t *testing.T) {
 }
 
 func TestHubMonitorConfigUsesRCBaseURL(t *testing.T) {
-	t.Setenv("VALET_RC_BASE_URL", "https://rc.example.test/")
+	setTestConfig(t, func(c *appConfig) {
+		c.RCBaseURL = "https://rc.example.test/"
+		c.HubCheckInterval = 30 * time.Second
+	})
 
-	cfg := hubMonitorConfigFromEnv()
+	cfg := currentHubMonitorConfig()
 
 	if cfg.BaseURL != "https://rc.example.test" {
 		t.Fatalf("unexpected Hub base URL: %q", cfg.BaseURL)
+	}
+	if cfg.Interval != 30*time.Second {
+		t.Fatalf("unexpected Hub check interval: %s", cfg.Interval)
 	}
 }
 

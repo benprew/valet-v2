@@ -1,6 +1,6 @@
 run:
 	./scripts/setup-arp-scan-capabilities.sh
-	set -a; . ./.env; set +a; go run .
+	go run . $(VALET_FLAGS)
 
 test:
 	go test -count=10 ./...

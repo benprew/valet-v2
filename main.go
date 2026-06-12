@@ -4,26 +4,22 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"os"
 	"time"
 )
 
 const defaultAddr = "127.0.0.1:8080"
 
 func main() {
-	store, err := openStore(dataPath())
+	parseFlags()
+
+	store, err := openStore(conf.DataPath)
 	if err != nil {
 		log.Fatalf("open account store: %v", err)
 	}
-	store.startHubMonitor(context.Background(), hubMonitorConfigFromEnv())
-
-	addr := os.Getenv("VALET_ADDR")
-	if addr == "" {
-		addr = defaultAddr
-	}
+	store.startHubMonitor(context.Background(), currentHubMonitorConfig())
 
 	server := &http.Server{
-		Addr:              addr,
+		Addr:              conf.Addr,
 		Handler:           store.routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -31,6 +27,6 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	log.Printf("V.A.L.E.T. listening on http://%s", addr)
+	log.Printf("V.A.L.E.T. listening on http://%s", conf.Addr)
 	log.Fatal(server.ListenAndServe())
 }
