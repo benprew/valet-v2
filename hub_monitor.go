@@ -10,31 +10,42 @@ import (
 )
 
 const defaultHubCheckInterval = time.Minute
+const defaultHubScanTimeout = 6 * time.Minute
 const hubTimeZone = "America/New_York"
 
 var hubLocation = loadHubLocation()
 
 type hubMonitorConfig struct {
-	BaseURL  string
-	Interval time.Duration
+	BaseURL     string
+	Interval    time.Duration
+	ScanTimeout time.Duration
 }
 
 func currentHubMonitorConfig() hubMonitorConfig {
 	return hubMonitorConfig{
-		BaseURL:  rcBaseURL(),
-		Interval: conf.HubCheckInterval,
+		BaseURL:     rcBaseURL(),
+		Interval:    conf.HubCheckInterval,
+		ScanTimeout: conf.HubScanTimeout,
 	}
 }
 
-func (s *accountStore) startHubMonitor(ctx context.Context, cfg hubMonitorConfig) {
+func normalizeHubMonitorConfig(cfg hubMonitorConfig) hubMonitorConfig {
 	if cfg.Interval <= 0 {
 		cfg.Interval = defaultHubCheckInterval
 	}
+	if cfg.ScanTimeout <= 0 {
+		cfg.ScanTimeout = defaultHubScanTimeout
+	}
+	return cfg
+}
+
+func (s *accountStore) startHubMonitor(ctx context.Context, cfg hubMonitorConfig) {
+	cfg = normalizeHubMonitorConfig(cfg)
 
 	client := newHubVisitClient(cfg)
 	go func() {
-		log.Printf("hub monitor checking local devices every %s", cfg.Interval)
-		s.runHubMonitorScan(ctx, client)
+		log.Printf("hub monitor checking local devices every %s with %s scan timeout", cfg.Interval, cfg.ScanTimeout)
+		s.runHubMonitorScan(ctx, client, cfg.ScanTimeout)
 
 		ticker := time.NewTicker(cfg.Interval)
 		defer ticker.Stop()
@@ -43,14 +54,17 @@ func (s *accountStore) startHubMonitor(ctx context.Context, cfg hubMonitorConfig
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runHubMonitorScan(ctx, client)
+				s.runHubMonitorScan(ctx, client, cfg.ScanTimeout)
 			}
 		}
 	}()
 }
 
-func (s *accountStore) runHubMonitorScan(ctx context.Context, client *hubVisitClient) {
-	scanCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+func (s *accountStore) runHubMonitorScan(ctx context.Context, client *hubVisitClient, timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = defaultHubScanTimeout
+	}
+	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if err := s.runHubMonitorOnce(scanCtx, client, time.Now()); err != nil {

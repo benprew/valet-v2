@@ -38,3 +38,11 @@ If RC's OAuth endpoint paths differ from the defaults, override them:
 ```
 
 OAuth access tokens are stored per email in the SQLite data file. Treat `data/accounts.db` as sensitive.
+
+## Hub monitor
+
+The hub monitor checks local network devices every minute by default. On larger subnets, `arp-scan --localnet` can take longer than a small timeout, especially on a Raspberry Pi. Tune the scan timeout with:
+
+```sh
+-hub-scan-timeout "6m"
+```

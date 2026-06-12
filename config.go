@@ -22,6 +22,7 @@ type appConfig struct {
 	OAuthScope        string
 
 	HubCheckInterval time.Duration
+	HubScanTimeout   time.Duration
 }
 
 var conf = defaultConfig()
@@ -32,6 +33,7 @@ func defaultConfig() appConfig {
 		DataPath:         filepath.Join("data", "accounts.db"),
 		RCBaseURL:        defaultRCBaseURL,
 		HubCheckInterval: defaultHubCheckInterval,
+		HubScanTimeout:   defaultHubScanTimeout,
 	}
 }
 
@@ -48,6 +50,7 @@ func parseFlags() {
 	flag.StringVar(&conf.OAuthScope, "oauth-scope", "", "OAuth scope to request")
 
 	flag.DurationVar(&conf.HubCheckInterval, "hub-check-interval", conf.HubCheckInterval, "how often the hub monitor scans local devices")
+	flag.DurationVar(&conf.HubScanTimeout, "hub-scan-timeout", conf.HubScanTimeout, "timeout for a local device scan")
 
 	flag.Parse()
 }

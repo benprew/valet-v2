@@ -235,6 +235,7 @@ func TestHubMonitorConfigUsesRCBaseURL(t *testing.T) {
 	setTestConfig(t, func(c *appConfig) {
 		c.RCBaseURL = "https://rc.example.test/"
 		c.HubCheckInterval = 30 * time.Second
+		c.HubScanTimeout = 45 * time.Second
 	})
 
 	cfg := currentHubMonitorConfig()
@@ -244,6 +245,36 @@ func TestHubMonitorConfigUsesRCBaseURL(t *testing.T) {
 	}
 	if cfg.Interval != 30*time.Second {
 		t.Fatalf("unexpected Hub check interval: %s", cfg.Interval)
+	}
+	if cfg.ScanTimeout != 45*time.Second {
+		t.Fatalf("unexpected Hub scan timeout: %s", cfg.ScanTimeout)
+	}
+}
+
+func TestHubMonitorScanUsesConfiguredTimeout(t *testing.T) {
+	var gotDeadline time.Time
+	restoreScanner := replaceScannerFuncForTest(t, func(ctx context.Context) ([]networkDevice, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("expected scan context deadline")
+		}
+		gotDeadline = deadline
+		return nil, nil
+	})
+	defer restoreScanner()
+
+	store := &accountStore{
+		Accounts:     map[string][]string{},
+		HubVisits:    map[string]string{},
+		OAuthTokens:  map[string]oauthToken{},
+		RCProfileIDs: map[string]string{},
+	}
+	start := time.Now()
+	store.runHubMonitorScan(context.Background(), newHubVisitClient(hubMonitorConfig{}), 30*time.Second)
+
+	timeout := gotDeadline.Sub(start)
+	if timeout < 29*time.Second || timeout > 31*time.Second {
+		t.Fatalf("expected scan deadline about 30s from start, got %s", timeout)
 	}
 }
 
@@ -327,11 +358,17 @@ func TestHubMonitorSkipsMACWithoutOAuthToken(t *testing.T) {
 func replaceScannerForTest(t *testing.T, devices []networkDevice) func() {
 	t.Helper()
 
-	original := scanNetworkDevicesFunc
-	scanNetworkDevicesFunc = func(context.Context) ([]networkDevice, error) {
+	return replaceScannerFuncForTest(t, func(context.Context) ([]networkDevice, error) {
 		return devices, nil
-	}
+	})
+}
+
+func replaceScannerFuncForTest(t *testing.T, replacement func(context.Context) ([]networkDevice, error)) func() {
+	t.Helper()
+
+	originalScan := scanNetworkDevicesFunc
+	scanNetworkDevicesFunc = replacement
 	return func() {
-		scanNetworkDevicesFunc = original
+		scanNetworkDevicesFunc = originalScan
 	}
 }
