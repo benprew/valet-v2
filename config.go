@@ -23,6 +23,8 @@ type appConfig struct {
 
 	HubCheckInterval time.Duration
 	HubScanTimeout   time.Duration
+
+	Kiosk kioskConfig
 }
 
 var conf = defaultConfig()
@@ -34,6 +36,14 @@ func defaultConfig() appConfig {
 		RCBaseURL:        defaultRCBaseURL,
 		HubCheckInterval: defaultHubCheckInterval,
 		HubScanTimeout:   defaultHubScanTimeout,
+		Kiosk: kioskConfig{
+			ResetDelay:     defaultKioskResetDelay,
+			ResetTimeout:   defaultKioskResetTimeout,
+			URL:            defaultKioskURL,
+			Browser:        defaultKioskBrowser,
+			BrowserProfile: defaultKioskBrowserProfile,
+			BrowserLog:     defaultKioskBrowserLog,
+		},
 	}
 }
 
@@ -51,6 +61,15 @@ func parseFlags() {
 
 	flag.DurationVar(&conf.HubCheckInterval, "hub-check-interval", conf.HubCheckInterval, "how often the hub monitor scans local devices")
 	flag.DurationVar(&conf.HubScanTimeout, "hub-scan-timeout", conf.HubScanTimeout, "timeout for a local device scan")
+
+	flag.BoolVar(&conf.Kiosk.Enabled, "kiosk", false, "enable kiosk mode")
+	flag.StringVar(&conf.Kiosk.ResetCommand, "kiosk-reset-command", "", "shell command that overrides the embedded kiosk reset script")
+	flag.DurationVar(&conf.Kiosk.ResetDelay, "kiosk-reset-delay", conf.Kiosk.ResetDelay, "delay before running a kiosk reset")
+	flag.DurationVar(&conf.Kiosk.ResetTimeout, "kiosk-reset-timeout", conf.Kiosk.ResetTimeout, "timeout for the kiosk reset command")
+	flag.StringVar(&conf.Kiosk.URL, "kiosk-url", conf.Kiosk.URL, "URL the kiosk browser opens")
+	flag.StringVar(&conf.Kiosk.Browser, "kiosk-browser", conf.Kiosk.Browser, "browser executable used in kiosk mode")
+	flag.StringVar(&conf.Kiosk.BrowserProfile, "kiosk-browser-profile", conf.Kiosk.BrowserProfile, "browser profile directory used in kiosk mode")
+	flag.StringVar(&conf.Kiosk.BrowserLog, "kiosk-browser-log", conf.Kiosk.BrowserLog, "log file for the kiosk browser")
 
 	flag.Parse()
 }

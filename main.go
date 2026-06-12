@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const defaultAddr = "127.0.0.1:8080"
+const defaultAddr = "127.0.0.1:3000"
 
 func main() {
 	parseFlags()
@@ -28,5 +28,6 @@ func main() {
 	}
 
 	log.Printf("V.A.L.E.T. listening on http://%s", conf.Addr)
+	scheduleKioskResetOnStartup()
 	log.Fatal(server.ListenAndServe())
 }

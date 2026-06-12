@@ -101,6 +101,7 @@ func (s *accountStore) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.endSession(w, r)
+	scheduleKioskResetAfterResponse(r, "logout")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -188,6 +189,7 @@ func (s *accountStore) handleOAuthStart(w http.ResponseWriter, r *http.Request) 
 
 func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if oauthError := r.URL.Query().Get("error"); oauthError != "" {
+		scheduleKioskResetAfterResponse(r, "OAuth authorization error")
 		renderPage(w, pageData{Error: "OAuth authorization failed: " + oauthError})
 		return
 	}
@@ -195,6 +197,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 	stateValue := r.URL.Query().Get("state")
 	state, ok := s.consumeOAuthState(stateValue)
 	if !ok {
+		scheduleKioskResetAfterResponse(r, "invalid OAuth state")
 		renderPage(w, pageData{Error: "OAuth authorization state is invalid or expired."})
 		return
 	}
@@ -243,6 +246,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 	if profileEmail != state.Email {
 		data := s.pageData(r.Context(), state.Email)
 		data.Error = fmt.Sprintf("OAuth account %s does not match %s.", profileEmail, state.Email)
+		scheduleKioskResetAfterResponse(r, "OAuth account mismatch")
 		renderPage(w, data)
 		return
 	}

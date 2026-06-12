@@ -46,3 +46,30 @@ The hub monitor checks local network devices every minute by default. On larger 
 ```sh
 -hub-scan-timeout "6m"
 ```
+
+## Kiosk mode
+
+For a shared kiosk where the browser and V.A.L.E.T. run on the same machine, enable kiosk reset support with:
+
+```sh
+./valet-v2 -kiosk \
+	-kiosk-url "http://127.0.0.1:3000" \
+	-kiosk-browser-profile "/tmp/valet-kiosk-browser"
+```
+
+When kiosk mode is enabled, V.A.L.E.T. runs its embedded reset script at startup and after local loopback requests for logout, OAuth cancellation, invalid OAuth state, or an OAuth email mismatch. Remote LAN requests cannot trigger the reset script.
+
+The embedded reset script kills the Chromium process using the configured profile, removes that profile directory, and starts Chromium again in kiosk mode with a clean profile. Set `-kiosk-reset-command` only if you need to override the embedded script with a custom shell command; the command receives the browser profile directory, kiosk URL, browser executable, and browser log file as `$1` through `$4`.
+
+## Running at boot
+
+Because configuration is passed as flags, the invocation is self-contained — nothing needs to be exported into the service's environment. A systemd unit only needs the flags on `ExecStart`, for example:
+
+```ini
+[Service]
+ExecStart=/home/ben/valet-v2 -kiosk \
+	-oauth-client-id ... \
+	-oauth-client-secret ...
+```
+
+Note that the kiosk reset launches a browser, so the service must run inside a graphical session (for example as a systemd user service started after `graphical-session.target`, so `DISPLAY`/`WAYLAND_DISPLAY` are available).

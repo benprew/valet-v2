@@ -11,7 +11,7 @@ import (
 )
 
 func TestDefaultAddrBindsLocalhost(t *testing.T) {
-	if defaultAddr != "127.0.0.1:8080" {
+	if defaultAddr != "127.0.0.1:3000" {
 		t.Fatalf("defaultAddr should bind localhost, got %q", defaultAddr)
 	}
 }
