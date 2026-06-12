@@ -28,7 +28,7 @@ func TestOAuthAuthorizeURLIncludesRequiredParameters(t *testing.T) {
 		Scope:        "hub_visits",
 	}
 
-	u, err := cfg.authorizeURL("state-value")
+	u, err := cfg.authorizeURL("state-value", "claimed@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,8 @@ func TestOAuthAuthorizeURLIncludesRequiredParameters(t *testing.T) {
 	for _, expected := range []string{
 		"client_id=client-id",
 		"redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Flogin%2Fcomplete",
+		"login_hint=claimed%40example.com",
+		"prompt=login",
 		"response_type=code",
 		"scope=hub_visits",
 		"state=state-value",

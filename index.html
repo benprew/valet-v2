@@ -38,10 +38,7 @@
                     {{if .HubAuthorized}}
                     <span class="auth-status">Hub authorized{{if .LastHubVisit}} | last marked {{.LastHubVisit}}{{end}}</span>
                     {{else if .OAuthConfigured}}
-                    <form action="/oauth/start" method="post">
-                        <input type="hidden" name="csrfToken" value="{{.CSRFToken}}">
-                        <button type="submit">Authorize Hub access</button>
-                    </form>
+                    <span class="auth-status">Hub authorization pending</span>
                     {{else}}
                     <span class="auth-status">OAuth is not configured</span>
                     {{end}}

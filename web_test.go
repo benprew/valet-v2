@@ -84,6 +84,79 @@ func TestProtectedFormsUseSessionEmailAndCSRF(t *testing.T) {
 	}
 }
 
+func TestLoginStartsOAuthForEmailWithoutToken(t *testing.T) {
+	const email = "new@example.com"
+
+	setTestConfig(t, func(c *appConfig) {
+		c.OAuthClientID = "client-id"
+		c.OAuthClientSecret = "client-secret"
+		c.OAuthAuthorizeURL = "https://rc.example.test/oauth/authorize"
+	})
+
+	store := testStore(t)
+	handler := store.routes()
+
+	response := httptest.NewRecorder()
+	request := formRequest(http.MethodPost, "/login", url.Values{
+		"email": {email},
+	})
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("expected OAuth redirect, got %d", response.Code)
+	}
+	location := response.Header().Get("Location")
+	if !strings.HasPrefix(location, "https://rc.example.test/oauth/authorize?") {
+		t.Fatalf("expected OAuth authorize redirect, got %q", location)
+	}
+	u, err := url.Parse(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, expected := range map[string]string{
+		"client_id":     "client-id",
+		"login_hint":    email,
+		"prompt":        "login",
+		"redirect_uri":  "http://example.com/login/complete",
+		"response_type": "code",
+	} {
+		if got := u.Query().Get(key); got != expected {
+			t.Fatalf("expected %s=%q, got %q in %s", key, expected, got, location)
+		}
+	}
+	if state := u.Query().Get("state"); state == "" {
+		t.Fatal("expected OAuth state in redirect")
+	}
+	sessionCookie(t, response.Result())
+}
+
+func TestLoginSkipsOAuthForEmailWithToken(t *testing.T) {
+	const email = "authorized@example.com"
+
+	setTestConfig(t, func(c *appConfig) {
+		c.OAuthClientID = "client-id"
+		c.OAuthClientSecret = "client-secret"
+		c.OAuthAuthorizeURL = "https://rc.example.test/oauth/authorize"
+	})
+
+	store := testStore(t)
+	store.Accounts[email] = []string{}
+	store.OAuthTokens[email] = oauthToken{AccessToken: "token"}
+	handler := store.routes()
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, formRequest(http.MethodPost, "/login", url.Values{
+		"email": {email},
+	}))
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("expected account redirect, got %d", response.Code)
+	}
+	if location := response.Header().Get("Location"); location != "/account" {
+		t.Fatalf("expected account redirect, got %q", location)
+	}
+}
+
 func TestAddMACNormalizesUserInput(t *testing.T) {
 	const (
 		email = "ben@example.com"

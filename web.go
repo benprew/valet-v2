@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -19,6 +20,11 @@ var pageHTML string
 var indexCSS string
 
 var pageTmpl = template.Must(template.New("index.html").Parse(pageHTML))
+
+var (
+	errCreateOAuthState           = errors.New("create OAuth state")
+	errBuildOAuthAuthorizationURL = errors.New("build OAuth authorization URL")
+)
 
 type pageData struct {
 	Email           string
@@ -82,8 +88,22 @@ func (s *accountStore) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
+	var authorizeURL string
+	cfg := oauthConfigFromRequest(r)
+	if cfg.configured() && !s.hasOAuthToken(email) {
+		authorizeURL, err = s.oauthAuthorizationURL(email, cfg)
+		if err != nil {
+			log.Printf("start OAuth authorization for %s after login: %v", email, err)
+		}
+	}
+
 	if err := s.startSession(w, r, email); err != nil {
 		renderPage(w, pageData{Error: "Could not start session."})
+		return
+	}
+
+	if authorizeURL != "" {
+		http.Redirect(w, r, authorizeURL, http.StatusSeeOther)
 		return
 	}
 
@@ -162,29 +182,44 @@ func (s *accountStore) handleOAuthStart(w http.ResponseWriter, r *http.Request) 
 	}
 
 	cfg := oauthConfigFromRequest(r)
-	if err := cfg.validate(); err != nil {
-		data := s.pageDataForSession(r.Context(), current)
-		data.Error = err.Error()
-		renderPage(w, data)
-		return
-	}
-
-	state, err := s.newOAuthState(current.Email, cfg.RedirectURL)
+	authorizeURL, err := s.oauthAuthorizationURL(current.Email, cfg)
 	if err != nil {
 		data := s.pageDataForSession(r.Context(), current)
-		data.Error = "Could not start OAuth authorization."
-		renderPage(w, data)
-		return
-	}
-
-	authorizeURL, err := cfg.authorizeURL(state)
-	if err != nil {
-		data := s.pageDataForSession(r.Context(), current)
-		data.Error = "Could not build OAuth authorization URL."
+		data.Error = oauthAuthorizationError(err)
 		renderPage(w, data)
 		return
 	}
 	http.Redirect(w, r, authorizeURL, http.StatusSeeOther)
+}
+
+func (s *accountStore) oauthAuthorizationURL(email string, cfg oauthConfig) (string, error) {
+	if err := cfg.validate(); err != nil {
+		return "", err
+	}
+
+	state, err := s.newOAuthState(email, cfg.RedirectURL)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errCreateOAuthState, err)
+	}
+
+	authorizeURL, err := cfg.authorizeURL(state, email)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", errBuildOAuthAuthorizationURL, err)
+	}
+	return authorizeURL, nil
+}
+
+func oauthAuthorizationError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errCreateOAuthState):
+		return "Could not start OAuth authorization."
+	case errors.Is(err, errBuildOAuthAuthorizationURL):
+		return "Could not build OAuth authorization URL."
+	default:
+		return err.Error()
+	}
 }
 
 func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {

@@ -39,6 +39,8 @@ If RC's OAuth endpoint paths differ from the defaults, override them:
 
 OAuth access tokens are stored per email in the SQLite data file. Treat `data/accounts.db` as sensitive.
 
+When OAuth is configured, entering an email address starts OAuth immediately for accounts that do not already have a stored token. The app sends the entered address as a login hint and verifies on callback that the authorized RC account email matches the entered address.
+
 ## Hub monitor
 
 The hub monitor checks local network devices every minute by default. On larger subnets, `arp-scan --localnet` can take longer than a small timeout, especially on a Raspberry Pi. Tune the scan timeout with:

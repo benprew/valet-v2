@@ -98,7 +98,7 @@ func (c oauthConfig) validateRefresh() error {
 	return nil
 }
 
-func (c oauthConfig) authorizeURL(state string) (string, error) {
+func (c oauthConfig) authorizeURL(state string, emails ...string) (string, error) {
 	u, err := url.Parse(c.AuthorizeURL)
 	if err != nil {
 		return "", err
@@ -108,6 +108,10 @@ func (c oauthConfig) authorizeURL(state string) (string, error) {
 	q.Set("redirect_uri", c.RedirectURL)
 	q.Set("response_type", "code")
 	q.Set("state", state)
+	if len(emails) > 0 && emails[0] != "" {
+		q.Set("login_hint", emails[0])
+		q.Set("prompt", "login")
+	}
 	if c.Scope != "" {
 		q.Set("scope", c.Scope)
 	}
