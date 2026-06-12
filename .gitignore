@@ -2,3 +2,5 @@
 .env.*
 !.env.example
 data/accounts.json
+data/accounts.db
+data/accounts.db-*

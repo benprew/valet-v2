@@ -342,7 +342,7 @@ func TestOAuthCallbackRejectsMismatchedAuthenticatedEmail(t *testing.T) {
 func testStore(t *testing.T) *accountStore {
 	t.Helper()
 
-	store, err := openStore(filepath.Join(t.TempDir(), "accounts.json"))
+	store, err := openStore(filepath.Join(t.TempDir(), "accounts.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

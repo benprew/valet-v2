@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,7 +60,7 @@ func TestHubMonitorMarksSeenRegisteredMACInHubOncePerDay(t *testing.T) {
 	defer restoreScanner()
 
 	store := &accountStore{
-		path:         filepath.Join(t.TempDir(), "accounts.json"),
+		path:         filepath.Join(t.TempDir(), "accounts.db"),
 		Accounts:     map[string][]string{email: {mac}},
 		HubVisits:    map[string]string{},
 		OAuthTokens:  map[string]oauthToken{email: {AccessToken: "test-token"}},
@@ -93,17 +91,6 @@ func TestHubMonitorMarksSeenRegisteredMACInHubOncePerDay(t *testing.T) {
 	if got := store.RCProfileIDs[email]; got != "123" {
 		t.Fatalf("expected cached RC profile id 123, got %q", got)
 	}
-	data, err := os.ReadFile(store.path)
-	if err != nil {
-		t.Fatalf("read persisted store: %v", err)
-	}
-	if !bytes.Contains(data, []byte(`"rc_profile_ids"`)) {
-		t.Fatalf("expected persisted store to use rc_profile_ids key: %s", string(data))
-	}
-	if bytes.Contains(data, []byte(`"profile_ids"`)) {
-		t.Fatalf("expected persisted store not to use profile_ids key: %s", string(data))
-	}
-
 	reloaded, err := openStore(store.path)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
@@ -201,7 +188,7 @@ func TestHubMonitorRefreshesExpiredOAuthToken(t *testing.T) {
 	defer restoreScanner()
 
 	store := &accountStore{
-		path:      filepath.Join(t.TempDir(), "accounts.json"),
+		path:      filepath.Join(t.TempDir(), "accounts.db"),
 		Accounts:  map[string][]string{email: {mac}},
 		HubVisits: map[string]string{},
 		OAuthTokens: map[string]oauthToken{email: {
@@ -268,7 +255,7 @@ func TestHubMonitorSkipsAmbiguousMACAssignments(t *testing.T) {
 	defer restoreScanner()
 
 	store := &accountStore{
-		path: filepath.Join(t.TempDir(), "accounts.json"),
+		path: filepath.Join(t.TempDir(), "accounts.db"),
 		Accounts: map[string][]string{
 			"one@example.com": {mac},
 			"two@example.com": {mac},
@@ -310,7 +297,7 @@ func TestHubMonitorSkipsMACWithoutOAuthToken(t *testing.T) {
 	defer restoreScanner()
 
 	store := &accountStore{
-		path:         filepath.Join(t.TempDir(), "accounts.json"),
+		path:         filepath.Join(t.TempDir(), "accounts.db"),
 		Accounts:     map[string][]string{email: {mac}},
 		HubVisits:    map[string]string{},
 		OAuthTokens:  map[string]oauthToken{},

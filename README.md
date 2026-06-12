@@ -36,4 +36,4 @@ export VALET_OAUTH_AUTHORIZE_URL="https://www.recurse.com/oauth/authorize"
 export VALET_OAUTH_TOKEN_URL="https://www.recurse.com/oauth/token"
 ```
 
-OAuth access tokens are stored per email in the JSON data file. Treat `data/accounts.json` as sensitive.
+OAuth access tokens are stored per email in the SQLite data file. Treat `data/accounts.db` as sensitive.
