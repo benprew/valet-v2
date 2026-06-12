@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"time"
 )
 
@@ -77,20 +76,15 @@ func (s *accountStore) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	if _, ok := s.Accounts[email]; !ok {
-		s.Accounts[email] = []string{}
-		if err := s.saveLocked(); err != nil {
-			s.mu.Unlock()
-			renderPage(w, pageData{Error: "Could not save account."})
-			return
-		}
+	if err := s.ensureAccount(email); err != nil {
+		log.Printf("save account %s: %v", email, err)
+		renderPage(w, pageData{Error: "Could not save account."})
+		return
 	}
-	s.mu.Unlock()
 
 	var authorizeURL string
 	cfg := oauthConfigFromRequest(r)
-	if cfg.configured() && !s.hasOAuthToken(email) {
+	if cfg.configured() && !s.hasToken(email) {
 		authorizeURL, err = s.oauthAuthorizationURL(email, cfg)
 		if err != nil {
 			log.Printf("start OAuth authorization for %s after login: %v", email, err)
@@ -153,19 +147,12 @@ func (s *accountStore) handleAddMAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	list := s.Accounts[current.Email]
-	if !contains(list, mac) {
-		list = append(list, mac)
-		sort.Strings(list)
-		s.Accounts[current.Email] = list
-		if err := s.saveLocked(); err != nil {
-			data := s.pageDataForSession(r.Context(), current)
-			data.Error = "Could not save MAC address."
-			renderPage(w, data)
-			return
-		}
+	if err := s.addMAC(current.Email, mac); err != nil {
+		log.Printf("save MAC address for %s: %v", current.Email, err)
+		data := s.pageDataForSession(r.Context(), current)
+		data.Error = "Could not save MAC address."
+		renderPage(w, data)
+		return
 	}
 
 	http.Redirect(w, r, "/account", http.StatusSeeOther)
@@ -256,7 +243,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	token, err := cfg.exchangeCode(ctx, code)
+	grant, err := cfg.exchangeCode(ctx, code)
 	if err != nil {
 		data := s.pageData(r.Context(), state.Email)
 		data.Error = err.Error()
@@ -264,7 +251,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	profile, err := newHubVisitClient(currentHubMonitorConfig()).withToken(token.AccessToken).authenticatedRCProfile(ctx)
+	profile, err := newHubVisitClient(currentHubMonitorConfig()).withToken(grant.AccessToken).authenticatedRCProfile(ctx)
 	if err != nil {
 		data := s.pageData(r.Context(), state.Email)
 		data.Error = "Could not verify OAuth account: " + err.Error()
@@ -286,7 +273,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := s.saveOAuthToken(state.Email, token); err != nil {
+	if err := s.saveToken(state.Email, grant.storedToken()); err != nil {
 		data := s.pageData(r.Context(), state.Email)
 		data.Error = "Could not save OAuth token."
 		renderPage(w, data)
@@ -294,7 +281,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 	}
 
 	if profile.ID != "" {
-		if err := s.cacheRCProfileID(state.Email, profile.ID); err != nil {
+		if err := s.setRCProfileID(state.Email, profile.ID); err != nil {
 			log.Printf("cache OAuth RC profile id for %s: %v", state.Email, err)
 		}
 	}
@@ -326,58 +313,49 @@ func (s *accountStore) handleDeleteMAC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.Lock()
-	list := s.Accounts[current.Email]
-	next := list[:0]
-	for _, existing := range list {
-		if existing != mac {
-			next = append(next, existing)
-		}
-	}
-	s.Accounts[current.Email] = next
-	if err := s.saveLocked(); err != nil {
-		s.mu.Unlock()
+	if err := s.removeMAC(current.Email, mac); err != nil {
+		log.Printf("remove MAC address for %s: %v", current.Email, err)
 		data := s.pageDataForSession(r.Context(), current)
 		data.Error = "Could not save account."
 		renderPage(w, data)
 		return
 	}
-	s.mu.Unlock()
 
 	http.Redirect(w, r, "/account", http.StatusSeeOther)
 }
 
 func (s *accountStore) pageData(ctx context.Context, email string) pageData {
-	s.mu.Lock()
-	macAddresses := cloneStrings(s.Accounts[email])
-	lastHubVisit := s.HubVisits[email]
-	registeredMACs := s.registeredMACSetLocked()
-	s.mu.Unlock()
+	data := pageData{
+		Email:           email,
+		HubAuthorized:   s.hasToken(email),
+		LastHubVisit:    s.lastHubVisit(email),
+		OAuthConfigured: oauthConfigFromRequest(nil).configured(),
+	}
+
+	var err error
+	data.MacAddresses, err = s.macs(email)
+	if err != nil {
+		log.Printf("load MAC addresses for %s: %v", email, err)
+		data.Error = "Could not load account data."
+		return data
+	}
+	assignments, err := s.macAssignments()
+	if err != nil {
+		log.Printf("load MAC assignments: %v", err)
+		data.Error = "Could not load account data."
+		return data
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	devices, err := cachedNetworkDevicesFunc(ctx)
 	if err != nil {
-		return pageData{
-			Email:           email,
-			MacAddresses:    macAddresses,
-			HubAuthorized:   s.hasOAuthToken(email),
-			LastHubVisit:    lastHubVisit,
-			OAuthConfigured: oauthConfigFromRequest(nil).configured(),
-			Error:           "Network scan failed: " + err.Error(),
-		}
+		data.Error = "Network scan failed: " + err.Error()
+		return data
 	}
-	devices = filterRegisteredDevices(devices, registeredMACs)
-
-	return pageData{
-		Email:           email,
-		MacAddresses:    macAddresses,
-		Devices:         devices,
-		HubAuthorized:   s.hasOAuthToken(email),
-		LastHubVisit:    lastHubVisit,
-		OAuthConfigured: oauthConfigFromRequest(nil).configured(),
-	}
+	data.Devices = filterRegisteredDevices(devices, assignments)
+	return data
 }
 
 func (s *accountStore) pageDataForSession(ctx context.Context, current session) pageData {
@@ -386,17 +364,7 @@ func (s *accountStore) pageDataForSession(ctx context.Context, current session) 
 	return data
 }
 
-func (s *accountStore) registeredMACSetLocked() map[string]struct{} {
-	registered := map[string]struct{}{}
-	for _, macAddresses := range s.Accounts {
-		for _, mac := range macAddresses {
-			registered[mac] = struct{}{}
-		}
-	}
-	return registered
-}
-
-func filterRegisteredDevices(devices []networkDevice, registeredMACs map[string]struct{}) []networkDevice {
+func filterRegisteredDevices(devices []networkDevice, registeredMACs map[string]string) []networkDevice {
 	filtered := devices[:0]
 	for _, device := range devices {
 		if _, registered := registeredMACs[device.MAC]; registered {

@@ -1,341 +1,258 @@
 package main
 
 import (
-	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 
 	_ "modernc.org/sqlite"
 )
 
-type accountStore struct {
-	path         string
-	db           *sql.DB
-	mu           sync.Mutex
-	Accounts     map[string][]string   `json:"accounts"`
-	HubVisits    map[string]string     `json:"hub_visits,omitempty"`
-	OAuthTokens  map[string]oauthToken `json:"oauth_tokens,omitempty"`
-	RCProfileIDs map[string]string     `json:"rc_profile_ids,omitempty"`
-	sessions     map[string]session
-	oauthStates  map[string]oauthState
+const (
+	tokenTypeOAuth = "oauth"
+	tokenTypePAT   = "pat"
+)
+
+// token is a long-lived credential for an account. For OAuth tokens
+// RefreshToken is exchanged for a short-lived access token on demand;
+// for personal access tokens it holds the token itself.
+type token struct {
+	Type         string
+	RefreshToken string
+	Scope        string
+	ExpiresAt    string
 }
+
+func (t token) canAuthorize() bool {
+	return t.RefreshToken != ""
+}
+
+// accountStore persists accounts, MAC addresses, and tokens in SQLite,
+// querying the database on each use. Hub visits, sessions, and OAuth
+// states live only in memory and reset on restart.
+type accountStore struct {
+	db *sql.DB
+
+	mu          sync.Mutex
+	hubVisits   map[string]string
+	sessions    map[string]session
+	oauthStates map[string]oauthState
+}
+
+const storeSchema = `
+CREATE TABLE IF NOT EXISTS accounts (
+	id INTEGER PRIMARY KEY,
+	email TEXT NOT NULL UNIQUE,
+	rc_profile_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS macs (
+	id INTEGER PRIMARY KEY,
+	account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+	mac_address TEXT NOT NULL,
+	UNIQUE (account_id, mac_address)
+);
+CREATE TABLE IF NOT EXISTS tokens (
+	id INTEGER PRIMARY KEY,
+	account_id INTEGER NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
+	token_type TEXT NOT NULL,
+	refresh_token TEXT NOT NULL,
+	scope TEXT NOT NULL DEFAULT '',
+	expires_at TEXT NOT NULL DEFAULT ''
+);
+`
 
 func openStore(path string) (*accountStore, error) {
-	store := newAccountStore(path)
-	dbExisted := true
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		dbExisted = false
-	}
-
-	if err := store.openDBLocked(); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	if err := store.loadFromDB(); err != nil {
-		return nil, err
-	}
-
-	if !dbExisted && store.empty() {
-		legacy, err := loadLegacyJSONStore(legacyJSONPath(path))
-		if err != nil {
-			return nil, err
-		}
-		if legacy != nil {
-			store.Accounts = legacy.Accounts
-			store.HubVisits = legacy.HubVisits
-			store.OAuthTokens = legacy.OAuthTokens
-			store.RCProfileIDs = legacy.RCProfileIDs
-			if err := store.saveLocked(); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	return store, nil
-}
-
-func newAccountStore(path string) *accountStore {
-	return &accountStore{
-		path:         path,
-		Accounts:     map[string][]string{},
-		HubVisits:    map[string]string{},
-		OAuthTokens:  map[string]oauthToken{},
-		RCProfileIDs: map[string]string{},
-		sessions:     map[string]session{},
-		oauthStates:  map[string]oauthState{},
-	}
-}
-
-func (s *accountStore) openDBLocked() error {
-	if s.db != nil {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return err
-	}
-	db, err := sql.Open("sqlite", s.path)
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(`
-		PRAGMA foreign_keys = ON;
-		CREATE TABLE IF NOT EXISTS accounts (
-			email TEXT PRIMARY KEY
-		);
-		CREATE TABLE IF NOT EXISTS account_macs (
-			email TEXT NOT NULL,
-			mac_address TEXT NOT NULL,
-			PRIMARY KEY (email, mac_address),
-			FOREIGN KEY (email) REFERENCES accounts(email) ON DELETE CASCADE
-		);
-		CREATE TABLE IF NOT EXISTS hub_visits (
-			email TEXT PRIMARY KEY,
-			date TEXT NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS oauth_tokens (
-			email TEXT PRIMARY KEY,
-			access_token TEXT NOT NULL,
-			token_type TEXT NOT NULL DEFAULT '',
-			refresh_token TEXT NOT NULL DEFAULT '',
-			scope TEXT NOT NULL DEFAULT '',
-			expires_at TEXT NOT NULL DEFAULT ''
-		);
-		CREATE TABLE IF NOT EXISTS rc_profile_ids (
-			email TEXT PRIMARY KEY,
-			rc_profile_id TEXT NOT NULL
-		);
-	`); err != nil {
+	legacy, err := isLegacySchema(db)
+	if err != nil {
 		db.Close()
-		return err
-	}
-	s.db = db
-	return nil
-}
-
-func (s *accountStore) loadFromDB() error {
-	if _, err := s.Accts(); err != nil {
-		return err
-	}
-	if err := s.loadHubVisits(); err != nil {
-		return err
-	}
-	if err := s.loadOAuthTokens(); err != nil {
-		return err
-	}
-	return s.loadRCProfileIDs()
-}
-
-func (s *accountStore) Accts() (map[string][]string, error) {
-	rows, err := s.db.Query("SELECT email FROM accounts ORDER BY email")
-	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email string
-		if err := rows.Scan(&email); err != nil {
-			return nil, err
-		}
-		s.Accounts[email] = []string{}
+	if legacy {
+		db.Close()
+		return nil, fmt.Errorf("%s uses the old database format; migrate it with: go run ./scripts/migrate -from %s -to <new.db>", path, path)
 	}
-	if err := rows.Err(); err != nil {
+
+	if _, err := db.Exec(storeSchema); err != nil {
+		db.Close()
 		return nil, err
 	}
 
-	rows, err = s.db.Query("SELECT email, mac_address FROM account_macs ORDER BY email, mac_address")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email, mac string
-		if err := rows.Scan(&email, &mac); err != nil {
-			return nil, err
-		}
-		s.Accounts[email] = append(s.Accounts[email], mac)
-	}
-	return s.Accounts, nil
+	return &accountStore{
+		db:          db,
+		hubVisits:   map[string]string{},
+		sessions:    map[string]session{},
+		oauthStates: map[string]oauthState{},
+	}, nil
 }
 
-func (s *accountStore) loadHubVisits() error {
-	rows, err := s.db.Query("SELECT email, date FROM hub_visits")
-	if err != nil {
-		return err
+// isLegacySchema reports whether the database still uses the old layout,
+// recognizable by an accounts table without an id column.
+func isLegacySchema(db *sql.DB) (bool, error) {
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'accounts'").Scan(&n); err != nil {
+		return false, err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email, date string
-		if err := rows.Scan(&email, &date); err != nil {
-			return err
-		}
-		s.HubVisits[email] = date
+	if n == 0 {
+		return false, nil
 	}
-	return rows.Err()
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name = 'id'").Scan(&n); err != nil {
+		return false, err
+	}
+	return n == 0, nil
 }
 
-func (s *accountStore) loadOAuthTokens() error {
+func (s *accountStore) ensureAccount(email string) error {
+	_, err := s.db.Exec("INSERT OR IGNORE INTO accounts(email) VALUES (?)", email)
+	return err
+}
+
+func (s *accountStore) macs(email string) ([]string, error) {
 	rows, err := s.db.Query(`
-		SELECT email, access_token, token_type, refresh_token, scope, expires_at
-		FROM oauth_tokens
+		SELECT mac_address FROM macs
+		JOIN accounts ON accounts.id = macs.account_id
+		WHERE accounts.email = ?
+		ORDER BY mac_address
+	`, email)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var macAddresses []string
+	for rows.Next() {
+		var mac string
+		if err := rows.Scan(&mac); err != nil {
+			return nil, err
+		}
+		macAddresses = append(macAddresses, mac)
+	}
+	return macAddresses, rows.Err()
+}
+
+func (s *accountStore) addMAC(email, mac string) error {
+	_, err := s.db.Exec(`
+		INSERT OR IGNORE INTO macs(account_id, mac_address)
+		SELECT id, ? FROM accounts WHERE email = ?
+	`, mac, email)
+	return err
+}
+
+func (s *accountStore) removeMAC(email, mac string) error {
+	_, err := s.db.Exec(`
+		DELETE FROM macs
+		WHERE mac_address = ? AND account_id IN (SELECT id FROM accounts WHERE email = ?)
+	`, mac, email)
+	return err
+}
+
+// macAssignments maps every registered MAC address to its account email,
+// or to "" when more than one account claims the same MAC.
+func (s *accountStore) macAssignments() (map[string]string, error) {
+	rows, err := s.db.Query(`
+		SELECT macs.mac_address, accounts.email FROM macs
+		JOIN accounts ON accounts.id = macs.account_id
 	`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
 
+	assignments := map[string]string{}
 	for rows.Next() {
-		var email string
-		var token oauthToken
-		if err := rows.Scan(&email, &token.AccessToken, &token.TokenType, &token.RefreshToken, &token.Scope, &token.ExpiresAt); err != nil {
-			return err
+		var mac, email string
+		if err := rows.Scan(&mac, &email); err != nil {
+			return nil, err
 		}
-		s.OAuthTokens[email] = token
+		if existing, ok := assignments[mac]; ok && existing != email {
+			assignments[mac] = ""
+			continue
+		}
+		assignments[mac] = email
 	}
-	return rows.Err()
+	return assignments, rows.Err()
 }
 
-func (s *accountStore) loadRCProfileIDs() error {
-	rows, err := s.db.Query("SELECT email, rc_profile_id FROM rc_profile_ids")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email, rcProfileID string
-		if err := rows.Scan(&email, &rcProfileID); err != nil {
-			return err
-		}
-		s.RCProfileIDs[email] = rcProfileID
-	}
-	return rows.Err()
-}
-
-func (s *accountStore) saveLocked() error {
-	if err := s.openDBLocked(); err != nil {
-		return err
-	}
-
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	for _, table := range []string{"account_macs", "accounts", "hub_visits", "oauth_tokens", "rc_profile_ids"} {
-		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
-			return err
-		}
-	}
-
-	emails := s.storeEmailsLocked()
-	for _, email := range emails {
-		if _, err := tx.Exec("INSERT INTO accounts(email) VALUES (?)", email); err != nil {
-			return err
-		}
-	}
-
-	for email, macAddresses := range s.Accounts {
-		for _, mac := range macAddresses {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO account_macs(email, mac_address) VALUES (?, ?)", email, mac); err != nil {
-				return err
-			}
-		}
-	}
-
-	for email, date := range s.HubVisits {
-		if _, err := tx.Exec("INSERT INTO hub_visits(email, date) VALUES (?, ?)", email, date); err != nil {
-			return err
-		}
-	}
-
-	for email, token := range s.OAuthTokens {
-		if _, err := tx.Exec(`
-			INSERT INTO oauth_tokens(email, access_token, token_type, refresh_token, scope, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?)
-		`, email, token.AccessToken, token.TokenType, token.RefreshToken, token.Scope, token.ExpiresAt); err != nil {
-			return err
-		}
-	}
-
-	for email, rcProfileID := range s.RCProfileIDs {
-		if _, err := tx.Exec("INSERT INTO rc_profile_ids(email, rc_profile_id) VALUES (?, ?)", email, rcProfileID); err != nil {
-			return err
-		}
-	}
-
-	return tx.Commit()
-}
-
-func (s *accountStore) storeEmailsLocked() []string {
-	emails := map[string]struct{}{}
-	for email := range s.Accounts {
-		emails[email] = struct{}{}
-	}
-	for email := range s.HubVisits {
-		emails[email] = struct{}{}
-	}
-	for email := range s.OAuthTokens {
-		emails[email] = struct{}{}
-	}
-	for email := range s.RCProfileIDs {
-		emails[email] = struct{}{}
-	}
-
-	list := make([]string, 0, len(emails))
-	for email := range emails {
-		list = append(list, email)
-	}
-	sort.Strings(list)
-	return list
-}
-
-func (s *accountStore) empty() bool {
-	return len(s.Accounts) == 0 && len(s.HubVisits) == 0 && len(s.OAuthTokens) == 0 && len(s.RCProfileIDs) == 0
-}
-
-func legacyJSONPath(dbPath string) string {
-	extension := filepath.Ext(dbPath)
-	if extension == "" {
-		return dbPath + ".json"
-	}
-	return dbPath[:len(dbPath)-len(extension)] + ".json"
-}
-
-func loadLegacyJSONStore(path string) (*accountStore, error) {
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+func (s *accountStore) token(email string) (token, bool, error) {
+	var t token
+	err := s.db.QueryRow(`
+		SELECT token_type, refresh_token, scope, expires_at FROM tokens
+		JOIN accounts ON accounts.id = tokens.account_id
+		WHERE accounts.email = ?
+	`, email).Scan(&t.Type, &t.RefreshToken, &t.Scope, &t.ExpiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return token{}, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return token{}, false, err
 	}
-	defer file.Close()
+	return t, t.canAuthorize(), nil
+}
 
-	store := newAccountStore("")
-	if err := json.NewDecoder(file).Decode(store); err != nil {
-		return nil, err
+func (s *accountStore) hasToken(email string) bool {
+	_, ok, err := s.token(email)
+	if err != nil {
+		log.Printf("look up token for %s: %v", email, err)
 	}
-	if store.Accounts == nil {
-		store.Accounts = map[string][]string{}
+	return ok
+}
+
+func (s *accountStore) saveToken(email string, t token) error {
+	if err := s.ensureAccount(email); err != nil {
+		return err
 	}
-	if store.HubVisits == nil {
-		store.HubVisits = map[string]string{}
+	_, err := s.db.Exec(`
+		INSERT INTO tokens(account_id, token_type, refresh_token, scope, expires_at)
+		SELECT id, ?, ?, ?, ? FROM accounts WHERE email = ?
+		ON CONFLICT(account_id) DO UPDATE SET
+			token_type = excluded.token_type,
+			refresh_token = excluded.refresh_token,
+			scope = excluded.scope,
+			expires_at = excluded.expires_at
+	`, t.Type, t.RefreshToken, t.Scope, t.ExpiresAt, email)
+	return err
+}
+
+func (s *accountStore) rcProfileID(email string) (string, bool) {
+	var id string
+	err := s.db.QueryRow("SELECT rc_profile_id FROM accounts WHERE email = ?", email).Scan(&id)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("look up RC profile id for %s: %v", email, err)
+		}
+		return "", false
 	}
-	if store.OAuthTokens == nil {
-		store.OAuthTokens = map[string]oauthToken{}
+	return id, id != ""
+}
+
+func (s *accountStore) setRCProfileID(email, rcProfileID string) error {
+	if err := s.ensureAccount(email); err != nil {
+		return err
 	}
-	if store.RCProfileIDs == nil {
-		store.RCProfileIDs = map[string]string{}
-	}
-	return store, nil
+	_, err := s.db.Exec("UPDATE accounts SET rc_profile_id = ? WHERE email = ?", rcProfileID, email)
+	return err
+}
+
+func (s *accountStore) lastHubVisit(email string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hubVisits[email]
+}
+
+func (s *accountStore) recordHubVisit(email, date string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hubVisits[email] = date
 }

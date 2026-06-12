@@ -61,7 +61,7 @@ func TestProtectedFormsUseSessionEmailAndCSRF(t *testing.T) {
 	if addResponse.Code != http.StatusForbidden {
 		t.Fatalf("expected invalid CSRF to be forbidden, got %d", addResponse.Code)
 	}
-	if contains(store.Accounts[email], mac) {
+	if contains(storedMACs(t, store, email), mac) {
 		t.Fatal("MAC address was added despite invalid CSRF token")
 	}
 
@@ -76,10 +76,14 @@ func TestProtectedFormsUseSessionEmailAndCSRF(t *testing.T) {
 	if addResponse.Code != http.StatusSeeOther {
 		t.Fatalf("expected add redirect, got %d", addResponse.Code)
 	}
-	if !contains(store.Accounts[email], mac) {
+	if !contains(storedMACs(t, store, email), mac) {
 		t.Fatal("MAC address was not added to session account")
 	}
-	if _, ok := store.Accounts["attacker@example.com"]; ok {
+	var attackerAccounts int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM accounts WHERE email = 'attacker@example.com'").Scan(&attackerAccounts); err != nil {
+		t.Fatal(err)
+	}
+	if attackerAccounts != 0 {
 		t.Fatal("form email created or modified a different account")
 	}
 }
@@ -140,8 +144,9 @@ func TestLoginSkipsOAuthForEmailWithToken(t *testing.T) {
 	})
 
 	store := testStore(t)
-	store.Accounts[email] = []string{}
-	store.OAuthTokens[email] = oauthToken{AccessToken: "token"}
+	if err := store.saveToken(email, token{Type: tokenTypeOAuth, RefreshToken: "refresh-token"}); err != nil {
+		t.Fatal(err)
+	}
 	handler := store.routes()
 
 	response := httptest.NewRecorder()
@@ -183,7 +188,7 @@ func TestAddMACNormalizesUserInput(t *testing.T) {
 	if addResponse.Code != http.StatusSeeOther {
 		t.Fatalf("expected add redirect, got %d", addResponse.Code)
 	}
-	if got := store.Accounts[email]; len(got) != 1 || got[0] != want {
+	if got := storedMACs(t, store, email); len(got) != 1 || got[0] != want {
 		t.Fatalf("stored MAC addresses = %#v, want []string{%q}", got, want)
 	}
 }
@@ -236,8 +241,8 @@ func TestAccountPageHidesScannedMACsRegisteredToAnyAccount(t *testing.T) {
 	defer restoreScanner()
 
 	store := testStore(t)
-	store.Accounts[email] = []string{currentMAC}
-	store.Accounts[otherEmail] = []string{otherMAC}
+	addAccountMAC(t, store, email, currentMAC)
+	addAccountMAC(t, store, otherEmail, otherMAC)
 	handler := store.routes()
 
 	loginResponse := httptest.NewRecorder()
@@ -310,8 +315,9 @@ func TestOAuthCallbackSavesTokenForMatchingAuthenticatedEmail(t *testing.T) {
 		switch r.URL.Path {
 		case "/oauth/token":
 			if err := json.NewEncoder(w).Encode(map[string]string{
-				"access_token": "claimed-token",
-				"token_type":   "bearer",
+				"access_token":  "claimed-token",
+				"token_type":    "bearer",
+				"refresh_token": "claimed-refresh-token",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -345,11 +351,14 @@ func TestOAuthCallbackSavesTokenForMatchingAuthenticatedEmail(t *testing.T) {
 	if response.Code != http.StatusSeeOther {
 		t.Fatalf("expected account redirect, got %d: %s", response.Code, response.Body.String())
 	}
-	token, ok := store.oauthToken(email)
-	if !ok || token.AccessToken != "claimed-token" {
-		t.Fatalf("expected saved OAuth token, got %#v", token)
+	saved, ok, err := store.token(email)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := store.RCProfileIDs[email]; got != "123" {
+	if !ok || saved.Type != tokenTypeOAuth || saved.RefreshToken != "claimed-refresh-token" {
+		t.Fatalf("expected saved OAuth token, got %#v", saved)
+	}
+	if got, _ := store.rcProfileID(email); got != "123" {
 		t.Fatalf("expected cached RC profile id 123, got %q", got)
 	}
 }
@@ -408,7 +417,7 @@ func TestOAuthCallbackRejectsMismatchedAuthenticatedEmail(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected error page, got %d", response.Code)
 	}
-	if store.hasOAuthToken(claimedEmail) {
+	if store.hasToken(claimedEmail) {
 		t.Fatal("mismatched OAuth account was saved as authorized")
 	}
 	if !strings.Contains(response.Body.String(), "OAuth account "+authenticatedEmail+" does not match "+claimedEmail) {
@@ -424,6 +433,27 @@ func testStore(t *testing.T) *accountStore {
 		t.Fatalf("open store: %v", err)
 	}
 	return store
+}
+
+func addAccountMAC(t *testing.T, store *accountStore, email, mac string) {
+	t.Helper()
+
+	if err := store.ensureAccount(email); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.addMAC(email, mac); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func storedMACs(t *testing.T, store *accountStore, email string) []string {
+	t.Helper()
+
+	macs, err := store.macs(email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return macs
 }
 
 func formRequest(method, target string, form url.Values) *http.Request {

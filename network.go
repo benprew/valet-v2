@@ -119,7 +119,7 @@ func (c *cachedARPScan) start(ctx context.Context) {
 func (c *cachedARPScan) refreshWithTimeout(ctx context.Context) {
 	scanCtx, cancel := context.WithTimeout(ctx, c.interval)
 	defer cancel()
-	if _, err := c.refresh(scanCtx); err != nil {
+	if err := c.refresh(scanCtx); err != nil {
 		log.Printf("arp-scan refresh failed: %v", err)
 	}
 }
@@ -127,17 +127,18 @@ func (c *cachedARPScan) refreshWithTimeout(ctx context.Context) {
 // refresh runs arp-scan and returns the cached devices. The mutex is never
 // held across the arp-scan exec, so a concurrent cached() read never blocks
 // on network probing.
-func (c *cachedARPScan) refresh(ctx context.Context) ([]networkDevice, error) {
+func (c *cachedARPScan) refresh(ctx context.Context) error {
 	devices, err := arpScanFunc(ctx)
+	if err != nil {
+		return err
+	}
 
 	c.mu.Lock()
-	if err == nil || len(devices) > 0 {
+	defer c.mu.Unlock()
+	if len(devices) > 0 {
 		c.cachedDevices = cloneNetworkDevices(devices)
 	}
-	result := cloneNetworkDevices(c.cachedDevices)
-	c.mu.Unlock()
-
-	return result, err
+	return nil
 }
 
 // cached returns the most recent arp-scan results without probing the network.

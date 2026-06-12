@@ -105,17 +105,17 @@ func TestOAuthExchangeCodeReturnsToken(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/login/complete",
 	}
 
-	token, err := cfg.exchangeCode(context.Background(), "auth-code")
+	grant, err := cfg.exchangeCode(context.Background(), "auth-code")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token.AccessToken != "access-token" {
-		t.Fatalf("unexpected access token: %q", token.AccessToken)
+	if grant.AccessToken != "access-token" {
+		t.Fatalf("unexpected access token: %q", grant.AccessToken)
 	}
-	if token.RefreshToken != "refresh-token" {
-		t.Fatalf("unexpected refresh token: %q", token.RefreshToken)
+	if grant.RefreshToken != "refresh-token" {
+		t.Fatalf("unexpected refresh token: %q", grant.RefreshToken)
 	}
-	if token.ExpiresAt == "" {
+	if grant.ExpiresAt == "" {
 		t.Fatal("expected ExpiresAt to be set")
 	}
 }
@@ -154,26 +154,26 @@ func TestOAuthRefreshTokenReturnsUpdatedToken(t *testing.T) {
 		ClientSecret: "client-secret",
 		TokenURL:     server.URL,
 	}
-	current := oauthToken{
-		AccessToken:  "old-access-token",
+	current := token{
+		Type:         tokenTypeOAuth,
 		RefreshToken: "old-refresh-token",
 		Scope:        "hub_visits",
 	}
 
-	token, err := cfg.refreshToken(context.Background(), current)
+	grant, err := cfg.refreshToken(context.Background(), current)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token.AccessToken != "new-access-token" {
-		t.Fatalf("unexpected access token: %q", token.AccessToken)
+	if grant.AccessToken != "new-access-token" {
+		t.Fatalf("unexpected access token: %q", grant.AccessToken)
 	}
-	if token.RefreshToken != "old-refresh-token" {
-		t.Fatalf("expected refresh token to be preserved, got %q", token.RefreshToken)
+	if grant.RefreshToken != "old-refresh-token" {
+		t.Fatalf("expected refresh token to be preserved, got %q", grant.RefreshToken)
 	}
-	if token.Scope != "hub_visits" {
-		t.Fatalf("expected scope to be preserved, got %q", token.Scope)
+	if grant.Scope != "hub_visits" {
+		t.Fatalf("expected scope to be preserved, got %q", grant.Scope)
 	}
-	if token.ExpiresAt == "" {
+	if grant.ExpiresAt == "" {
 		t.Fatal("expected ExpiresAt to be set")
 	}
 }

@@ -83,7 +83,11 @@ func (s *accountStore) runHubMonitorOnce(ctx context.Context, client *hubVisitCl
 		seenMACs[device.MAC] = struct{}{}
 	}
 
-	assignments := s.macAssignments()
+	assignments, err := s.macAssignments()
+	if err != nil {
+		return err
+	}
+
 	today := hubDate(now)
 	var errs []error
 	for mac, email := range assignments {
@@ -97,7 +101,7 @@ func (s *accountStore) runHubMonitorOnce(ctx context.Context, client *hubVisitCl
 		if s.lastHubVisit(email) == today {
 			continue
 		}
-		if !s.hasOAuthToken(email) {
+		if !s.hasToken(email) {
 			continue
 		}
 		if err := s.markEmailInHub(ctx, client, email, today); err != nil {
@@ -122,74 +126,20 @@ func hubDate(now time.Time) string {
 	return now.In(hubLocation).Format(time.DateOnly)
 }
 
-func (s *accountStore) macAssignments() map[string]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	assignments := map[string]string{}
-	for email, macAddresses := range s.Accounts {
-		for _, mac := range macAddresses {
-			if existing, ok := assignments[mac]; ok && existing != email {
-				assignments[mac] = ""
-				continue
-			}
-			assignments[mac] = email
-		}
-	}
-	return assignments
-}
-
-func (s *accountStore) lastHubVisit(email string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.HubVisits[email]
-}
-
-func (s *accountStore) cachedRCProfileID(email string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	id, ok := s.RCProfileIDs[email]
-	return id, ok && id != ""
-}
-
-func (s *accountStore) cacheRCProfileID(email, rcProfileID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.RCProfileIDs[email] = rcProfileID
-	return s.saveLocked()
-}
-
-func (s *accountStore) cacheAuthorizedRCProfileID(ctx context.Context, email, accessToken string) error {
-	client := newHubVisitClient(currentHubMonitorConfig()).withToken(accessToken)
-	rcProfileID, err := client.findRCProfileID(ctx, email)
-	if err != nil {
-		return err
-	}
-	return s.cacheRCProfileID(email, rcProfileID)
-}
-
-func (s *accountStore) recordHubVisit(email, date string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.HubVisits[email] = date
-	return s.saveLocked()
-}
-
 func (s *accountStore) markEmailInHub(ctx context.Context, client *hubVisitClient, email, date string) error {
-	token, err := s.usableOAuthToken(ctx, email)
+	bearer, err := s.bearerToken(ctx, email)
 	if err != nil {
 		return err
 	}
-	client = client.withToken(token.AccessToken)
+	client = client.withToken(bearer)
 
-	rcProfileID, ok := s.cachedRCProfileID(email)
+	rcProfileID, ok := s.rcProfileID(email)
 	if !ok {
-		var err error
 		rcProfileID, err = client.findRCProfileID(ctx, email)
 		if err != nil {
 			return err
 		}
-		if err := s.cacheRCProfileID(email, rcProfileID); err != nil {
+		if err := s.setRCProfileID(email, rcProfileID); err != nil {
 			return fmt.Errorf("cache RC profile id: %w", err)
 		}
 	}
@@ -197,8 +147,6 @@ func (s *accountStore) markEmailInHub(ctx context.Context, client *hubVisitClien
 	if err := client.markHubVisit(ctx, rcProfileID, date); err != nil {
 		return err
 	}
-	if err := s.recordHubVisit(email, date); err != nil {
-		return fmt.Errorf("record hub visit: %w", err)
-	}
+	s.recordHubVisit(email, date)
 	return nil
 }

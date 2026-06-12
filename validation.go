@@ -48,8 +48,3 @@ func contains(values []string, value string) bool {
 	}
 	return false
 }
-
-func cloneStrings(values []string) []string {
-	out := append([]string(nil), values...)
-	return out
-}

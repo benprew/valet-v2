@@ -12,7 +12,8 @@ pkill -f -- "--user-data-dir=${profile_dir}" 2>/dev/null || true
 rm -rf -- "${profile_dir}"
 mkdir -p -- "${profile_dir}"
 
-nohup "${browser}" \
+DISPLAY=:0 nohup "${browser}" \
+    --kiosk \
     --no-first-run \
     --disable-session-crashed-bubble \
     --user-data-dir="${profile_dir}" \

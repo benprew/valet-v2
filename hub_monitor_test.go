@@ -59,12 +59,14 @@ func TestHubMonitorMarksSeenRegisteredMACInHubOncePerDay(t *testing.T) {
 	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
 	defer restoreScanner()
 
-	store := &accountStore{
-		path:         filepath.Join(t.TempDir(), "accounts.db"),
-		Accounts:     map[string][]string{email: {mac}},
-		HubVisits:    map[string]string{},
-		OAuthTokens:  map[string]oauthToken{email: {AccessToken: "test-token"}},
-		RCProfileIDs: map[string]string{},
+	path := filepath.Join(t.TempDir(), "accounts.db")
+	store, err := openStore(path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	addAccountMAC(t, store, email, mac)
+	if err := store.saveToken(email, token{Type: tokenTypePAT, RefreshToken: "test-token"}); err != nil {
+		t.Fatal(err)
 	}
 	client := newHubVisitClient(hubMonitorConfig{
 		BaseURL: server.URL,
@@ -85,25 +87,28 @@ func TestHubMonitorMarksSeenRegisteredMACInHubOncePerDay(t *testing.T) {
 	if patches != 1 {
 		t.Fatalf("expected one hub visit PATCH, got %d", patches)
 	}
-	if got := store.HubVisits[email]; got != date {
+	if got := store.lastHubVisit(email); got != date {
 		t.Fatalf("expected hub visit date %q, got %q", date, got)
 	}
-	if got := store.RCProfileIDs[email]; got != "123" {
+	if got, _ := store.rcProfileID(email); got != "123" {
 		t.Fatalf("expected cached RC profile id 123, got %q", got)
 	}
 
-	reloaded, err := openStore(store.path)
+	if err := store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := openStore(path)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	if got := reloaded.HubVisits[email]; got != date {
-		t.Fatalf("expected persisted hub visit date %q, got %q", date, got)
-	}
-	if got := reloaded.RCProfileIDs[email]; got != "123" {
+	if got, _ := reloaded.rcProfileID(email); got != "123" {
 		t.Fatalf("expected persisted RC profile id 123, got %q", got)
 	}
-	if token, ok := reloaded.OAuthTokens[email]; !ok || token.AccessToken != "test-token" {
-		t.Fatalf("expected persisted OAuth token, got %#v", token)
+	if !reloaded.hasToken(email) {
+		t.Fatal("expected persisted token")
+	}
+	if got := reloaded.lastHubVisit(email); got != "" {
+		t.Fatalf("expected hub visits to reset on restart, got %q", got)
 	}
 }
 
@@ -115,7 +120,7 @@ func TestHubDateUsesNewYorkCalendarDay(t *testing.T) {
 	}
 }
 
-func TestHubMonitorRefreshesExpiredOAuthToken(t *testing.T) {
+func TestHubMonitorRefreshesOAuthAccessToken(t *testing.T) {
 	const (
 		email = "ben@example.com"
 		mac   = "82:00:3b:d0:93:12"
@@ -190,16 +195,14 @@ func TestHubMonitorRefreshesExpiredOAuthToken(t *testing.T) {
 	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
 	defer restoreScanner()
 
-	store := &accountStore{
-		path:      filepath.Join(t.TempDir(), "accounts.db"),
-		Accounts:  map[string][]string{email: {mac}},
-		HubVisits: map[string]string{},
-		OAuthTokens: map[string]oauthToken{email: {
-			AccessToken:  "expired-token",
-			RefreshToken: "refresh-token",
-			ExpiresAt:    "2026-06-08T00:00:00Z",
-		}},
-		RCProfileIDs: map[string]string{},
+	store := testStore(t)
+	addAccountMAC(t, store, email, mac)
+	if err := store.saveToken(email, token{
+		Type:         tokenTypeOAuth,
+		RefreshToken: "refresh-token",
+		ExpiresAt:    "2026-06-08T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	client := newHubVisitClient(hubMonitorConfig{
 		BaseURL: server.URL,
@@ -220,15 +223,15 @@ func TestHubMonitorRefreshesExpiredOAuthToken(t *testing.T) {
 	if patches != 1 {
 		t.Fatalf("expected one hub visit PATCH, got %d", patches)
 	}
-	token := store.OAuthTokens[email]
-	if token.AccessToken != "fresh-token" {
-		t.Fatalf("expected refreshed access token to be saved, got %q", token.AccessToken)
+	saved, ok, err := store.token(email)
+	if err != nil || !ok {
+		t.Fatalf("expected stored token, got ok=%v err=%v", ok, err)
 	}
-	if token.RefreshToken != "refresh-token" {
-		t.Fatalf("expected refresh token to be preserved, got %q", token.RefreshToken)
+	if saved.RefreshToken != "refresh-token" {
+		t.Fatalf("expected refresh token to be preserved, got %q", saved.RefreshToken)
 	}
-	if token.ExpiresAt == "" || token.ExpiresAt == "2026-06-08T00:00:00Z" {
-		t.Fatalf("expected refreshed ExpiresAt, got %q", token.ExpiresAt)
+	if saved.ExpiresAt == "" || saved.ExpiresAt == "2026-06-08T00:00:00Z" {
+		t.Fatalf("expected refreshed ExpiresAt, got %q", saved.ExpiresAt)
 	}
 }
 
@@ -264,12 +267,7 @@ func TestHubMonitorScanUsesConfiguredTimeout(t *testing.T) {
 	})
 	defer restoreScanner()
 
-	store := &accountStore{
-		Accounts:     map[string][]string{},
-		HubVisits:    map[string]string{},
-		OAuthTokens:  map[string]oauthToken{},
-		RCProfileIDs: map[string]string{},
-	}
+	store := testStore(t)
 	start := time.Now()
 	store.runHubMonitorScan(context.Background(), newHubVisitClient(hubMonitorConfig{}), 30*time.Second)
 
@@ -294,18 +292,12 @@ func TestHubMonitorSkipsAmbiguousMACAssignments(t *testing.T) {
 	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
 	defer restoreScanner()
 
-	store := &accountStore{
-		path: filepath.Join(t.TempDir(), "accounts.db"),
-		Accounts: map[string][]string{
-			"one@example.com": {mac},
-			"two@example.com": {mac},
-		},
-		HubVisits: map[string]string{},
-		OAuthTokens: map[string]oauthToken{
-			"one@example.com": {AccessToken: "test-token"},
-			"two@example.com": {AccessToken: "test-token"},
-		},
-		RCProfileIDs: map[string]string{},
+	store := testStore(t)
+	for _, email := range []string{"one@example.com", "two@example.com"} {
+		addAccountMAC(t, store, email, mac)
+		if err := store.saveToken(email, token{Type: tokenTypePAT, RefreshToken: "test-token"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	client := newHubVisitClient(hubMonitorConfig{
 		BaseURL: server.URL,
@@ -320,7 +312,7 @@ func TestHubMonitorSkipsAmbiguousMACAssignments(t *testing.T) {
 	}
 }
 
-func TestHubMonitorSkipsMACWithoutOAuthToken(t *testing.T) {
+func TestHubMonitorSkipsMACWithoutToken(t *testing.T) {
 	const (
 		email = "ben@example.com"
 		mac   = "82:00:3b:d0:93:12"
@@ -336,13 +328,8 @@ func TestHubMonitorSkipsMACWithoutOAuthToken(t *testing.T) {
 	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
 	defer restoreScanner()
 
-	store := &accountStore{
-		path:         filepath.Join(t.TempDir(), "accounts.db"),
-		Accounts:     map[string][]string{email: {mac}},
-		HubVisits:    map[string]string{},
-		OAuthTokens:  map[string]oauthToken{},
-		RCProfileIDs: map[string]string{},
-	}
+	store := testStore(t)
+	addAccountMAC(t, store, email, mac)
 	client := newHubVisitClient(hubMonitorConfig{
 		BaseURL: server.URL,
 	})
@@ -352,7 +339,7 @@ func TestHubMonitorSkipsMACWithoutOAuthToken(t *testing.T) {
 		t.Fatalf("monitor run failed: %v", err)
 	}
 	if requests != 0 {
-		t.Fatalf("expected no RC API requests without OAuth token, got %d", requests)
+		t.Fatalf("expected no RC API requests without a token, got %d", requests)
 	}
 }
 

@@ -83,7 +83,7 @@ func TestStartRefreshesCacheEveryInterval(t *testing.T) {
 	}
 }
 
-func TestCachedARPScanCachesPartialResultsAfterFailure(t *testing.T) {
+func TestCachedARPScanIgnoresPartialResultsOnFailure(t *testing.T) {
 	calls := 0
 	restore := replaceARPScanForTest(t, func(context.Context) ([]networkDevice, error) {
 		calls++
@@ -100,21 +100,17 @@ func TestCachedARPScanCachesPartialResultsAfterFailure(t *testing.T) {
 	defer restore()
 
 	cache := cachedARPScan{interval: 10 * time.Minute}
-	if _, err := cache.refresh(context.Background()); err != nil {
+	if err := cache.refresh(context.Background()); err != nil {
 		t.Fatalf("first scan failed: %v", err)
 	}
 
-	devices, err := cache.refresh(context.Background())
-	if err == nil {
+	if err := cache.refresh(context.Background()); err == nil {
 		t.Fatal("expected partial scan to return command error")
 	}
-	expected := []networkDevice{{IP: "10.100.0.2", MAC: "d8:3a:dd:1f:a1:9b", Source: "arp-scan"}}
-	if !reflect.DeepEqual(devices, expected) {
-		t.Fatalf("unexpected partial devices:\n got: %#v\nwant: %#v", devices, expected)
-	}
 
+	expected := []networkDevice{{IP: "10.100.0.1", MAC: "00:08:a2:0e:bc:61", Source: "arp-scan"}}
 	if cached := cache.cached(); !reflect.DeepEqual(cached, expected) {
-		t.Fatalf("unexpected cached partial devices:\n got: %#v\nwant: %#v", cached, expected)
+		t.Fatalf("expected failed scan to keep previous cache:\n got: %#v\nwant: %#v", cached, expected)
 	}
 }
 
@@ -130,17 +126,16 @@ func TestCachedARPScanKeepsLastSuccessAfterFailure(t *testing.T) {
 	defer restore()
 
 	cache := cachedARPScan{interval: 10 * time.Minute}
-	if _, err := cache.refresh(context.Background()); err != nil {
+	if err := cache.refresh(context.Background()); err != nil {
 		t.Fatalf("first scan failed: %v", err)
 	}
 
-	devices, err := cache.refresh(context.Background())
-	if err == nil {
+	if err := cache.refresh(context.Background()); err == nil {
 		t.Fatal("expected second scan to return an error")
 	}
 	expected := []networkDevice{{IP: "10.100.0.1", MAC: "00:08:a2:0e:bc:61", Source: "arp-scan"}}
-	if !reflect.DeepEqual(devices, expected) {
-		t.Fatalf("unexpected cached devices after failure:\n got: %#v\nwant: %#v", devices, expected)
+	if cached := cache.cached(); !reflect.DeepEqual(cached, expected) {
+		t.Fatalf("unexpected cached devices after failure:\n got: %#v\nwant: %#v", cached, expected)
 	}
 }
 
@@ -162,7 +157,7 @@ func TestCachedReturnsLastRefreshWithoutScanning(t *testing.T) {
 		t.Fatalf("cached() ran arp-scan %d times; it must never probe the network", calls)
 	}
 
-	if _, err := cache.refresh(context.Background()); err != nil {
+	if err := cache.refresh(context.Background()); err != nil {
 		t.Fatalf("refresh failed: %v", err)
 	}
 
