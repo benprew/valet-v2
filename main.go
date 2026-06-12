@@ -16,6 +16,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open account store: %v", err)
 	}
+	deviceCache.start(context.Background())
 	store.startHubMonitor(context.Background(), currentHubMonitorConfig())
 
 	server := &http.Server{

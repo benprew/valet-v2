@@ -91,6 +91,7 @@ func TestHubMonitorMarksSeenRegisteredMACInHubOncePerDay(t *testing.T) {
 	if got := store.RCProfileIDs[email]; got != "123" {
 		t.Fatalf("expected cached RC profile id 123, got %q", got)
 	}
+
 	reloaded, err := openStore(store.path)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
@@ -367,8 +368,11 @@ func replaceScannerFuncForTest(t *testing.T, replacement func(context.Context) (
 	t.Helper()
 
 	originalScan := scanNetworkDevicesFunc
+	originalCached := cachedNetworkDevicesFunc
 	scanNetworkDevicesFunc = replacement
+	cachedNetworkDevicesFunc = replacement
 	return func() {
 		scanNetworkDevicesFunc = originalScan
+		cachedNetworkDevicesFunc = originalCached
 	}
 }

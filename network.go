@@ -3,9 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log"
 	"net"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -13,19 +13,22 @@ import (
 	"time"
 )
 
-const arpScanInterval = 10 * time.Minute
+const arpScanInterval = 20 * time.Minute
 
-var scanNetworkDevicesFunc = scanNetworkDevices
-var runARPScanCommandFunc = runARPScanCommand
+// Both funcs are read-only: the arp-scan cache is refreshed out of band by
+// deviceCache.start. They are vars so tests can stub the hub monitor and
+// request/response paths independently.
+var scanNetworkDevicesFunc = cachedNetworkDevices
+var cachedNetworkDevicesFunc = cachedNetworkDevices
+var arpScanFunc = arpScan
 
-var arpScanCache = cachedARPScan{
+var deviceCache = cachedARPScan{
 	interval: arpScanInterval,
 }
 
 type cachedARPScan struct {
 	mu            sync.Mutex
 	interval      time.Duration
-	lastRun       time.Time
 	cachedDevices []networkDevice
 }
 
@@ -38,27 +41,21 @@ type networkDevice struct {
 	Registered bool
 }
 
-func scanNetworkDevices(ctx context.Context) ([]networkDevice, error) {
-	devices, err := scanIPNeigh(ctx)
+// cachedNetworkDevices runs 'ip neigh' scan and combines that with results from
+// the most recent arp-scan
+func cachedNetworkDevices(ctx context.Context) ([]networkDevice, error) {
+	cached := deviceCache.cached()
+	neighbors, err := scanIPNeigh(ctx)
 	if err != nil {
-		devices, err = scanProcARP()
-		if err != nil {
-			return nil, err
-		}
+		fmt.Println("ERROR: ip neigh failed:", err)
+		return cached, err
 	}
-
-	if arpDevices, err := arpScanCache.devices(ctx, time.Now()); len(arpDevices) > 0 {
-		devices = mergeNetworkDevices(devices, arpDevices)
-	} else if err != nil {
-		log.Printf("arp-scan failed: %v", err)
-	}
-
-	sortDevices(devices)
-	return devices, nil
+	return mergeNetworkDevices(cached, neighbors), nil
 }
 
+// ip neigh returns ipv4 and ipv6 devices
 func scanIPNeigh(ctx context.Context) ([]networkDevice, error) {
-	out, err := exec.CommandContext(ctx, "ip", "-r", "neigh", "show").Output()
+	out, err := exec.CommandContext(ctx, "ip", "neigh", "show").Output()
 	if err != nil {
 		return nil, err
 	}
@@ -96,76 +93,75 @@ func scanIPNeigh(ctx context.Context) ([]networkDevice, error) {
 			devices = append(devices, device)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	sortDevices(devices)
-	return devices, nil
+	return devices, scanner.Err()
 }
 
-func scanProcARP() ([]networkDevice, error) {
-	file, err := os.Open("/proc/net/arp")
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+// start launches a background goroutine that refreshes the arp-scan cache
+// every interval until ctx is cancelled.
+func (c *cachedARPScan) start(ctx context.Context) {
+	go func() {
+		log.Printf("network scanner refreshing arp-scan cache every %s", c.interval)
+		c.refreshWithTimeout(ctx)
 
-	var devices []networkDevice
-	scanner := bufio.NewScanner(file)
-	first := true
-	for scanner.Scan() {
-		if first {
-			first = false
-			continue
+		ticker := time.NewTicker(c.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				c.refreshWithTimeout(ctx)
+			}
 		}
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 6 {
-			continue
-		}
-		device := networkDevice{
-			IP:        fields[0],
-			MAC:       strings.ToLower(fields[3]),
-			Interface: fields[5],
-			Source:    "proc-arp",
-		}
-		if isUsableNeighbor(device) {
-			devices = append(devices, device)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	sortDevices(devices)
-	return devices, nil
+	}()
 }
 
-func (c *cachedARPScan) devices(ctx context.Context, now time.Time) ([]networkDevice, error) {
+func (c *cachedARPScan) refreshWithTimeout(ctx context.Context) {
+	scanCtx, cancel := context.WithTimeout(ctx, c.interval)
+	defer cancel()
+	if _, err := c.refresh(scanCtx); err != nil {
+		log.Printf("arp-scan refresh failed: %v", err)
+	}
+}
+
+// refresh runs arp-scan and returns the cached devices. The mutex is never
+// held across the arp-scan exec, so a concurrent cached() read never blocks
+// on network probing.
+func (c *cachedARPScan) refresh(ctx context.Context) ([]networkDevice, error) {
+	devices, err := arpScanFunc(ctx)
+
+	c.mu.Lock()
+	if err == nil || len(devices) > 0 {
+		c.cachedDevices = cloneNetworkDevices(devices)
+	}
+	result := cloneNetworkDevices(c.cachedDevices)
+	c.mu.Unlock()
+
+	return result, err
+}
+
+// cached returns the most recent arp-scan results without probing the network.
+func (c *cachedARPScan) cached() []networkDevice {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.interval {
-		return cloneNetworkDevices(c.cachedDevices), nil
-	}
-	c.lastRun = now
-
-	devices, err := scanARPLocalNet(ctx)
-	if err != nil {
-		return cloneNetworkDevices(c.cachedDevices), err
-	}
-	c.cachedDevices = cloneNetworkDevices(devices)
-	return cloneNetworkDevices(c.cachedDevices), nil
+	return cloneNetworkDevices(c.cachedDevices)
 }
 
-func scanARPLocalNet(ctx context.Context) ([]networkDevice, error) {
-	out, err := runARPScanCommandFunc(ctx)
-	if err != nil {
-		return nil, err
+func arpScan(ctx context.Context) ([]networkDevice, error) {
+	cmd := exec.CommandContext(ctx, arpScanPath(), "--localnet", "--quiet", "--plain", "--numeric")
+	out, commandErr := cmd.CombinedOutput()
+	devices, parseErr := arpScanToDevices(out)
+	if parseErr != nil {
+		return devices, parseErr
 	}
+	return devices, commandErr
+}
 
+func arpScanToDevices(out []byte) ([]networkDevice, error) {
+	devMap := map[string]string{} // map of MAC -> IP
 	var devices []networkDevice
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 2 {
@@ -174,33 +170,28 @@ func scanARPLocalNet(ctx context.Context) ([]networkDevice, error) {
 		if net.ParseIP(fields[0]) == nil || !isMACAddress(fields[1]) {
 			continue
 		}
-
-		device := networkDevice{
-			IP:     fields[0],
-			MAC:    strings.ToLower(fields[1]),
-			Source: "arp-scan",
-		}
-		if isUsableNeighbor(device) {
-			devices = append(devices, device)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+		devMap[strings.ToLower(fields[1])] = fields[0]
 	}
 
+	for mac, ip := range devMap {
+		devices = append(devices, networkDevice{MAC: mac, IP: ip, Source: "arp-scan"})
+	}
 	sortDevices(devices)
-	return devices, nil
+
+	return devices, scanner.Err()
 }
 
-func runARPScanCommand(ctx context.Context) ([]byte, error) {
-	return exec.CommandContext(ctx, "arp-scan", "--localnet").Output()
+func arpScanPath() string {
+	path, err := exec.LookPath("arp-scan")
+	if err == nil {
+		return path
+	}
+
+	return "/usr/sbin/arp-scan"
 }
 
 func isUsableNeighbor(device networkDevice) bool {
-	if device.IP == "" || device.MAC == "" {
-		return false
-	}
-	if device.MAC == "00:00:00:00:00:00" {
+	if !isMACAddress(device.MAC) {
 		return false
 	}
 	state := strings.ToUpper(device.State)

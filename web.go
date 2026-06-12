@@ -357,7 +357,7 @@ func (s *accountStore) pageData(ctx context.Context, email string) pageData {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
-	devices, err := scanNetworkDevicesFunc(ctx)
+	devices, err := cachedNetworkDevicesFunc(ctx)
 	if err != nil {
 		return pageData{
 			Email:           email,
