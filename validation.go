@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 )
 
 var (
-	emailRE = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
-	macRE   = regexp.MustCompile(`(?i)^([0-9a-f]{2}:){5}[0-9a-f]{2}$`)
+	emailRE     = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+	rawHexMACRE = regexp.MustCompile(`(?i)^[0-9a-f]{12}$`)
 )
 
 func normalizeEmail(email string) (string, error) {
@@ -20,12 +21,23 @@ func normalizeEmail(email string) (string, error) {
 }
 
 func normalizeMAC(mac string) (string, error) {
-	mac = strings.ToLower(strings.TrimSpace(mac))
-	mac = strings.ReplaceAll(mac, "-", ":")
-	if !macRE.MatchString(mac) {
+	mac = strings.TrimSpace(mac)
+	if rawHexMACRE.MatchString(mac) {
+		mac = strings.Join([]string{
+			mac[0:2],
+			mac[2:4],
+			mac[4:6],
+			mac[6:8],
+			mac[8:10],
+			mac[10:12],
+		}, ":")
+	}
+
+	hardwareAddr, err := net.ParseMAC(mac)
+	if err != nil || len(hardwareAddr) != 6 {
 		return "", fmt.Errorf("invalid MAC address")
 	}
-	return mac, nil
+	return hardwareAddr.String(), nil
 }
 
 func contains(values []string, value string) bool {

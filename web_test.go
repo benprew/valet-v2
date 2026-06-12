@@ -84,6 +84,37 @@ func TestProtectedFormsUseSessionEmailAndCSRF(t *testing.T) {
 	}
 }
 
+func TestAddMACNormalizesUserInput(t *testing.T) {
+	const (
+		email = "ben@example.com"
+		want  = "82:00:3b:d0:93:12"
+	)
+
+	store := testStore(t)
+	handler := store.routes()
+
+	loginResponse := httptest.NewRecorder()
+	handler.ServeHTTP(loginResponse, formRequest(http.MethodPost, "/login", url.Values{
+		"email": {email},
+	}))
+	cookie := sessionCookie(t, loginResponse.Result())
+	current := storedSession(t, store, cookie.Value)
+
+	addResponse := httptest.NewRecorder()
+	addRequest := formRequest(http.MethodPost, "/mac-address", url.Values{
+		csrfFormField: {current.CSRFToken},
+		"macAddress":  {"82003BD09312"},
+	})
+	addRequest.AddCookie(cookie)
+	handler.ServeHTTP(addResponse, addRequest)
+	if addResponse.Code != http.StatusSeeOther {
+		t.Fatalf("expected add redirect, got %d", addResponse.Code)
+	}
+	if got := store.Accounts[email]; len(got) != 1 || got[0] != want {
+		t.Fatalf("stored MAC addresses = %#v, want []string{%q}", got, want)
+	}
+}
+
 func TestAccountPageIgnoresEmailQuery(t *testing.T) {
 	const email = "ben@example.com"
 
