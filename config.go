@@ -9,10 +9,25 @@ import (
 
 const defaultRCBaseURL = "https://www.recurse.com"
 
+// Injected at build time via build.sh:
+//
+//	-ldflags "-X 'main.embeddedOAuthClientID=...' -X 'main.embeddedOAuthClientSecret=...'"
+//
+// These are empty in plain `go build`/`go run` dev builds, where the
+// -oauth-client-id/-oauth-client-secret flags (or .env) supply the values.
+var (
+	embeddedOAuthClientID     string
+	embeddedOAuthClientSecret string
+)
+
 type appConfig struct {
-	Addr      string
-	DataPath  string
-	RCBaseURL string
+	Addr        string
+	HTTPAddr    string
+	HTTPSAddr   string
+	TLSCertPath string
+	TLSKeyPath  string
+	DataPath    string
+	RCBaseURL   string
 
 	OAuthClientID     string
 	OAuthClientSecret string
@@ -32,6 +47,8 @@ var conf = defaultConfig()
 func defaultConfig() appConfig {
 	return appConfig{
 		Addr:             defaultAddr,
+		TLSCertPath:      filepath.Join("data", "tls-cert.pem"),
+		TLSKeyPath:       filepath.Join("data", "tls-key.pem"),
 		DataPath:         filepath.Join("data", "accounts.db"),
 		RCBaseURL:        defaultRCBaseURL,
 		HubCheckInterval: defaultHubCheckInterval,
@@ -48,12 +65,17 @@ func defaultConfig() appConfig {
 }
 
 func parseFlags() {
-	flag.StringVar(&conf.Addr, "addr", conf.Addr, "address to listen on")
+	flag.StringVar(&conf.Addr, "addr", conf.Addr, "loopback address the kiosk browser connects to (empty disables)")
+	flag.StringVar(&conf.HTTPAddr, "http-addr", conf.HTTPAddr, "additional plain HTTP address to listen on, e.g. :80 (empty disables)")
+	flag.StringVar(&conf.HTTPSAddr, "https-addr", conf.HTTPSAddr, "HTTPS address to listen on, e.g. :443 (empty disables)")
+	flag.StringVar(&conf.TLSCertPath, "tls-cert", conf.TLSCertPath, "TLS certificate file used for -https-addr; a self-signed cert is generated here if missing")
+	flag.StringVar(&conf.TLSKeyPath, "tls-key", conf.TLSKeyPath, "TLS private key file used for -https-addr; generated alongside -tls-cert if missing")
 	flag.StringVar(&conf.DataPath, "data", conf.DataPath, "path to the SQLite data file")
 	flag.StringVar(&conf.RCBaseURL, "rc-base-url", conf.RCBaseURL, "base URL for Recurse Center OAuth and API requests")
 
-	flag.StringVar(&conf.OAuthClientID, "oauth-client-id", "", "OAuth client ID")
-	flag.StringVar(&conf.OAuthClientSecret, "oauth-client-secret", "", "OAuth client secret")
+	flag.StringVar(&conf.OAuthClientID, "oauth-client-id", embeddedOAuthClientID, "OAuth client ID")
+	flag.StringVar(&conf.OAuthClientSecret, "oauth-client-secret", embeddedOAuthClientSecret, "OAuth client secret")
+
 	flag.StringVar(&conf.OAuthAuthorizeURL, "oauth-authorize-url", "", "OAuth authorize URL (default <rc-base-url>/oauth/authorize)")
 	flag.StringVar(&conf.OAuthTokenURL, "oauth-token-url", "", "OAuth token URL (default <rc-base-url>/oauth/token)")
 	flag.StringVar(&conf.OAuthRedirectURL, "oauth-redirect-url", "", "OAuth redirect URL (default inferred from the request host)")
