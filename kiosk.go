@@ -19,6 +19,8 @@ const (
 	defaultKioskBrowser        = "chromium-browser"
 	defaultKioskBrowserProfile = "/tmp/valet-kiosk-browser"
 	defaultKioskBrowserLog     = "/tmp/valet-kiosk-browser.log"
+
+	kioskWatchdogInterval = 2500 * time.Millisecond
 )
 
 //go:embed scripts/valet-kiosk-reset.sh
@@ -56,6 +58,45 @@ func scheduleKioskResetOnStartup() {
 	}
 
 	scheduleKioskReset(cfg, "at startup")
+}
+
+// startKioskWatchdog polls every kioskWatchdogInterval and, whenever the kiosk
+// browser is not running, schedules a reset to relaunch it. It returns
+// immediately; the polling loop runs in its own goroutine until ctx is done.
+func startKioskWatchdog(ctx context.Context) {
+	cfg := conf.Kiosk
+	if !cfg.Enabled {
+		return
+	}
+
+	log.Printf("starting kiosk watchdog (interval %s)", kioskWatchdogInterval)
+	go func() {
+		ticker := time.NewTicker(kioskWatchdogInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if kioskBrowserRunning(ctx, cfg) {
+					continue
+				}
+				scheduleKioskReset(cfg, "watchdog: browser not running")
+			}
+		}
+	}()
+}
+
+// kioskBrowserRunning reports whether the kiosk browser process is alive. It
+// matches on the browser executable (default chromium-browser) via pgrep.
+func kioskBrowserRunning(ctx context.Context, cfg kioskConfig) bool {
+	browser := cfg.Browser
+	if browser == "" {
+		browser = defaultKioskBrowser
+	}
+	// pgrep exits 0 when at least one process matches, 1 when none do.
+	err := exec.CommandContext(ctx, "pgrep", "-f", "--", browser).Run()
+	return err == nil
 }
 
 func scheduleKioskReset(cfg kioskConfig, reason string) {

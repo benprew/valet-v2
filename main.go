@@ -21,6 +21,7 @@ func main() {
 
 	handler := store.routes()
 	scheduleKioskResetOnStartup()
+	startKioskWatchdog(context.Background())
 
 	// Every listener serves the same handler. Kiosk resets are gated on the
 	// connection's remote address (see requestIsFromLoopback), so only requests

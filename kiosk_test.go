@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -59,10 +58,19 @@ func TestEmbeddedKioskResetScriptRunsWithoutExternalPath(t *testing.T) {
 		t.Fatalf("run embedded kiosk reset: %v", err)
 	}
 
-	if info, err := os.Stat(profileDir); err != nil {
-		t.Fatalf("expected profile directory to be recreated: %v", err)
-	} else if !info.IsDir() {
-		t.Fatalf("expected profile path to be a directory")
+	deadline := time.Now().Add(time.Second)
+	for {
+		matches, err := filepath.Glob(profileDir + ".*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected temporary profile directories to be cleaned up, found %#v", matches)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
