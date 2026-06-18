@@ -29,11 +29,23 @@ build:
 		.
 
 run:
-	./scripts/setup-arp-scan-capabilities.sh
 	go run . $(VALET_FLAGS)
 
-test:
+test: verify-systemd-service
 	go test -count=10 ./...
+
+verify-systemd-service:
+	@set -eu; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	mkdir -p "$$tmpdir/home/pirc/valet" "$$tmpdir/etc/systemd/system"; \
+	cp deploy/valet-v2.service "$$tmpdir/etc/systemd/system/valet-v2.service"; \
+	touch "$$tmpdir/home/pirc/valet/valet-v2"; \
+	chmod +x "$$tmpdir/home/pirc/valet/valet-v2"; \
+	for unit in sysinit.target basic.target network-online.target graphical.target; do \
+		printf '[Unit]\nDescription=%s\n' "$$unit" > "$$tmpdir/etc/systemd/system/$$unit"; \
+	done; \
+	systemd-analyze verify --root="$$tmpdir" etc/systemd/system/valet-v2.service
 
 lint:
 	golangci-lint run --fix
