@@ -19,8 +19,8 @@ Environment=XAUTHORITY=/home/pirc/.Xauthority
 
 # Bind the privileged ports 80 and 443 without running as root.
 # CAP_NET_RAW/ADMIN are used when calling arp-scan
-AmbientCapabilities=CAP_NET_BIND_SERVICE,CAP_NET_RAW,CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
 
 # -addr / -kiosk-url keep the kiosk browser on the loopback listener, so only
