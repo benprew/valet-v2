@@ -7,15 +7,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=ben
-Group=ben
-WorkingDirectory=/home/ben/valet-v2
+User=pirc
+Group=pirc
+WorkingDirectory=/home/pirc/valet
 
 # The kiosk reset launches Chromium, which needs access to the X display of the
 # logged-in session. Adjust DISPLAY/XAUTHORITY to match your setup (these values
 # are typical for a single auto-logged-in seat on :0).
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/ben/.Xauthority
+Environment=XAUTHORITY=/home/pirc/.Xauthority
 
 # Bind the privileged ports 80 and 443 without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -26,15 +26,15 @@ NoNewPrivileges=true
 # its requests can trigger a kiosk reset. -http-addr / -https-addr expose the
 # app to the LAN, where requests are non-loopback and cannot reset the kiosk.
 # The self-signed TLS cert is generated under data/ on first start.
-ExecStart=/home/ben/valet-v2/valet-v2 \
+ExecStart=/home/pirc/valet/valet-v2 \
     -kiosk \
     -addr 127.0.0.1:3000 \
     -kiosk-url http://127.0.0.1:3000 \
     -http-addr :80 \
     -https-addr :443 \
-    -data /home/ben/valet-v2/data/accounts.db \
-    -tls-cert /home/ben/valet-v2/data/tls-cert.pem \
-    -tls-key /home/ben/valet-v2/data/tls-key.pem
+    -data /home/pirc/valet/data/accounts.db \
+    -tls-cert /home/pirc/valet/data/tls-cert.pem \
+    -tls-key /home/pirc/valet/data/tls-key.pem
 
 Restart=on-failure
 RestartSec=5
