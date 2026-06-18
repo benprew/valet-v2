@@ -223,21 +223,22 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 		renderPage(w, pageData{Error: "OAuth authorization state is invalid or expired."})
 		return
 	}
+	renderStateError := func(message string) {
+		data := s.pageData(r.Context(), state.Email)
+		data.Error = message
+		renderPage(w, data)
+	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = "OAuth authorization did not return a code."
-		renderPage(w, data)
+		renderStateError("OAuth authorization did not return a code.")
 		return
 	}
 
 	cfg := oauthConfigFromRequest(r)
 	cfg.RedirectURL = state.RedirectURL
 	if err := cfg.validate(); err != nil {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = err.Error()
-		renderPage(w, data)
+		renderStateError(err.Error())
 		return
 	}
 
@@ -245,38 +246,28 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 	defer cancel()
 	grant, err := cfg.exchangeCode(ctx, code)
 	if err != nil {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = err.Error()
-		renderPage(w, data)
+		renderStateError(err.Error())
 		return
 	}
 
 	profile, err := newHubVisitClient(currentHubMonitorConfig()).withToken(grant.AccessToken).authenticatedRCProfile(ctx)
 	if err != nil {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = "Could not verify OAuth account: " + err.Error()
-		renderPage(w, data)
+		renderStateError("Could not verify OAuth account: " + err.Error())
 		return
 	}
 	profileEmail, err := normalizeEmail(profile.Email)
 	if err != nil {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = "Could not verify OAuth account email."
-		renderPage(w, data)
+		renderStateError("Could not verify OAuth account email.")
 		return
 	}
 	if profileEmail != state.Email {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = fmt.Sprintf("OAuth account %s does not match %s.", profileEmail, state.Email)
 		scheduleKioskResetAfterResponse(r, "OAuth account mismatch")
-		renderPage(w, data)
+		renderStateError(fmt.Sprintf("OAuth account %s does not match %s.", profileEmail, state.Email))
 		return
 	}
 
 	if err := s.saveToken(state.Email, grant.storedToken()); err != nil {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = "Could not save OAuth token."
-		renderPage(w, data)
+		renderStateError("Could not save OAuth token.")
 		return
 	}
 
@@ -287,9 +278,7 @@ func (s *accountStore) handleOAuthCallback(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := s.startSession(w, r, state.Email); err != nil {
-		data := s.pageData(r.Context(), state.Email)
-		data.Error = "Could not start session."
-		renderPage(w, data)
+		renderStateError("Could not start session.")
 		return
 	}
 

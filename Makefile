@@ -48,6 +48,7 @@ verify-systemd-service:
 	systemd-analyze verify --root="$$tmpdir" etc/systemd/system/valet-v2.service
 
 lint:
+	go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -fix ./...
 	golangci-lint run --fix
 	.venv/bin/ruff check --fix .
 	.venv/bin/ruff format .

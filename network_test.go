@@ -64,12 +64,11 @@ func TestStartRefreshesCacheEveryInterval(t *testing.T) {
 	defer restore()
 
 	cache := cachedARPScan{interval: 10 * time.Millisecond}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	cache.start(ctx)
 
 	// One immediate refresh plus at least one ticker-driven refresh.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case <-scans:
 		case <-time.After(5 * time.Second):
@@ -162,7 +161,7 @@ func TestCachedReturnsLastRefreshWithoutScanning(t *testing.T) {
 	}
 
 	expected := []networkDevice{{IP: "10.100.0.1", MAC: "00:08:a2:0e:bc:61", Source: "arp-scan"}}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if got := cache.cached(); !reflect.DeepEqual(got, expected) {
 			t.Fatalf("cached() = %#v, want %#v", got, expected)
 		}

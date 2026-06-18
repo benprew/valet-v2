@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -242,21 +243,9 @@ func sortDevices(devices []networkDevice) {
 			}
 			return devices[i].IP < devices[j].IP
 		}
-		if cmp := bytesCompare(left.To16(), right.To16()); cmp != 0 {
+		if cmp := bytes.Compare(left.To16(), right.To16()); cmp != 0 {
 			return cmp < 0
 		}
 		return devices[i].MAC < devices[j].MAC
 	})
-}
-
-func bytesCompare(a, b []byte) int {
-	for i := 0; i < len(a) && i < len(b); i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return len(a) - len(b)
 }
