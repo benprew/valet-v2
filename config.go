@@ -9,7 +9,7 @@ import (
 
 const defaultRCBaseURL = "https://www.recurse.com"
 
-// Injected at build time via build.sh:
+// Injected at build time via `make build`:
 //
 //	-ldflags "-X 'main.embeddedOAuthClientID=...' -X 'main.embeddedOAuthClientSecret=...'"
 //

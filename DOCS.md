@@ -72,7 +72,7 @@ CLIENT_ID=...
 CLIENT_SECRET=...
 ```
 
-It is passphrase-encrypted with the Recurse password. Building with `./build.sh` prompts for that passphrase, decrypts the file, and injects the values via linker flags:
+It is passphrase-encrypted with the Recurse password. Building with `make build` prompts for that passphrase, decrypts the file, and injects the values via linker flags:
 
 ```sh
 -ldflags "-X 'main.embeddedOAuthClientID=...' -X 'main.embeddedOAuthClientSecret=...'"
@@ -89,7 +89,7 @@ To rotate the credentials, re-encrypt with the same passphrase and rebuild:
 ```sh
 printf 'CLIENT_ID=%s\nCLIENT_SECRET=%s\n' "$new_id" "$new_secret" \
   | age -p -o secrets.age
-./build.sh
+make build
 ```
 
 When OAuth is configured, entering an email address starts OAuth immediately for accounts that do not already have a stored token. The app sends the entered address as a login hint and verifies on callback that the authorized RC account email matches the entered address.
