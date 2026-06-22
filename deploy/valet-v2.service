@@ -23,16 +23,14 @@ AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
 
-# -addr / -kiosk-url keep the kiosk browser on the loopback listener, so only
-# its requests can trigger a kiosk reset. -http-addr / -https-addr expose the
-# app to the LAN, where requests are non-loopback and cannot reset the kiosk.
+# The kiosk browser uses the HTTPS listener and receives an unguessable cookie
+# at launch. That cookie lets it trigger resets without granting that ability
+# to other clients on the same LAN listener.
 # The self-signed TLS cert is generated under data/ on first start.
 ExecStart=/home/pirc/valet/valet-v2 \
     -kiosk \
-    -addr 127.0.0.1:3000 \
-    -kiosk-url http://127.0.0.1:3000 \
-    -http-addr :80 \
-    -https-addr :443 \
+    -kiosk-url https://10.100.0.3 \
+    -oauth-redirect-url https://10.100.0.3/login/complete \
     -data /home/pirc/valet/data/accounts.db \
     -tls-cert /home/pirc/valet/data/tls-cert.pem \
     -tls-key /home/pirc/valet/data/tls-key.pem

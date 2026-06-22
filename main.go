@@ -7,10 +7,27 @@ import (
 	"time"
 )
 
-const defaultAddr = "127.0.0.1:3000"
+const (
+	httpAddr  = ":80"
+	httpsAddr = ":443"
+)
 
 func main() {
 	parseFlags()
+	if err := initializeKioskAuth(); err != nil {
+		log.Fatalf("initialize kiosk authentication: %v", err)
+	}
+
+	tlsConfig, err := loadOrCreateTLSConfig(conf.TLSCertPath, conf.TLSKeyPath)
+	if err != nil {
+		log.Fatalf("tls setup: %v", err)
+	}
+	if conf.Kiosk.Enabled {
+		conf.Kiosk.TLSCertSPKI, err = tlsCertificateSPKIHash(tlsConfig)
+		if err != nil {
+			log.Fatalf("prepare kiosk TLS certificate pin: %v", err)
+		}
+	}
 
 	store, err := openStore(conf.DataPath)
 	if err != nil {
@@ -23,35 +40,19 @@ func main() {
 	scheduleKioskResetOnStartup()
 	startKioskWatchdog(context.Background())
 
-	// Every listener serves the same handler. Kiosk resets are gated on the
-	// connection's remote address (see requestIsFromLoopback), so only requests
-	// arriving over the loopback listener can trigger a browser reset; LAN
-	// requests on -http-addr/-https-addr cannot.
-	errs := make(chan error, 3)
-	started := 0
+	// Every listener serves the same handler. Kiosk resets require the random
+	// cookie issued to the browser profile at launch, independent of which
+	// listener receives the request.
+	errs := make(chan error, 2)
 
-	for _, addr := range dedupe(conf.Addr, conf.HTTPAddr) {
-		srv := newServer(addr, handler)
-		started++
-		log.Printf("V.A.L.E.T. listening on http://%s", addr)
-		go func() { errs <- srv.ListenAndServe() }()
-	}
+	httpServer := newServer(httpAddr, handler)
+	log.Printf("V.A.L.E.T. listening on http://%s", httpAddr)
+	go func() { errs <- httpServer.ListenAndServe() }()
 
-	if conf.HTTPSAddr != "" {
-		tlsConfig, err := loadOrCreateTLSConfig(conf.TLSCertPath, conf.TLSKeyPath)
-		if err != nil {
-			log.Fatalf("tls setup: %v", err)
-		}
-		srv := newServer(conf.HTTPSAddr, handler)
-		srv.TLSConfig = tlsConfig
-		started++
-		log.Printf("V.A.L.E.T. listening on https://%s", conf.HTTPSAddr)
-		go func() { errs <- srv.ListenAndServeTLS("", "") }()
-	}
-
-	if started == 0 {
-		log.Fatal("no listen addresses configured; set -addr, -http-addr, or -https-addr")
-	}
+	httpsServer := newServer(httpsAddr, handler)
+	httpsServer.TLSConfig = tlsConfig
+	log.Printf("V.A.L.E.T. listening on https://%s", httpsAddr)
+	go func() { errs <- httpsServer.ListenAndServeTLS("", "") }()
 
 	log.Fatal(<-errs)
 }
@@ -65,19 +66,4 @@ func newServer(addr string, handler http.Handler) *http.Server {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-}
-
-// dedupe returns the non-empty, distinct addresses in order so we never try to
-// bind the same address twice (e.g. when -addr and -http-addr coincide).
-func dedupe(addrs ...string) []string {
-	seen := make(map[string]bool, len(addrs))
-	var out []string
-	for _, a := range addrs {
-		if a == "" || seen[a] {
-			continue
-		}
-		seen[a] = true
-		out = append(out, a)
-	}
-	return out
 }

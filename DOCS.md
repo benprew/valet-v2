@@ -12,13 +12,12 @@ The hub monitor passively monitors local network devices by using `ip neigh`. It
 
 ## Listening addresses
 
-V.A.L.E.T. listens on several addresses at once, all serving the same app:
+V.A.L.E.T. always listens on two addresses, both serving the same app:
 
-- localhost:3000 - the loopback listener the kiosk browser connects to
 - :80 - plain HTTP (for resolving valet.recurse.com)
 - :443 - HTTPs with self-signed cert (for resolving valet.recurse.com)
 
-V.A.L.E.T. uses a "kiosk" mode for local connections so that it can reset the browser after making on oauth connection. Since oauth is browser-profile specific each user needs their own browser profile.
+V.A.L.E.T. uses a "kiosk" mode so that it can reset the shared browser after an OAuth session. Since OAuth is browser-profile specific, each user gets a fresh browser profile.
 
 Note: ports below 1024 (`:80`, `:443`) require either root or the `CAP_NET_BIND_SERVICE` capability, see systemd service unit file for how this is done.
 
@@ -29,22 +28,23 @@ For a shared kiosk where the browser and V.A.L.E.T. run on the same machine, ena
 
 ```sh
 ./valet-v2 -kiosk \
-    -kiosk-url "http://127.0.0.1:3000" \
+    -kiosk-url "https://10.100.0.3" \
+    -oauth-redirect-url "https://10.100.0.3/login/complete" \
     -kiosk-browser-profile "/tmp/valet-kiosk-browser"
 ```
 
-When kiosk mode is enabled, V.A.L.E.T. runs its embedded reset script at startup and after local loopback requests for logout, OAuth cancellation, invalid OAuth state, or an OAuth email mismatch. Remote LAN requests cannot trigger the reset script.
+When kiosk mode is enabled, V.A.L.E.T. gives each browser profile an unguessable, `HttpOnly` kiosk cookie through a bootstrap redirect. Requests bearing that cookie can reset the browser after logout, OAuth cancellation, invalid OAuth state, or an OAuth email mismatch even when they arrive on the shared HTTPS listener. Other clients cannot trigger the reset script.
 
-The embedded reset script treats the configured profile path as a base name and launches Chromium in a fresh per-run profile directory derived from it (e.g. `/tmp/valet-kiosk-browser.AbC123`). It signals any previously running kiosk browser but does not wait for it to exit — the new browser starts immediately in its own clean directory, and each browser removes its own profile directory when it exits, so temp space does not accumulate. Set `-kiosk-reset-command` only if you need to override the embedded script with a custom shell command; the command receives the browser profile directory, kiosk URL, browser executable, and browser log file as `$1` through `$4`.
+The embedded reset script treats the configured profile path as a base name and launches Chromium in a fresh per-run profile directory derived from it (e.g. `/tmp/valet-kiosk-browser.AbC123`). It signals any previously running kiosk browser but does not wait for it to exit — the new browser starts immediately in its own clean directory, and each browser removes its own profile directory when it exits, so temp space does not accumulate.
 
 
 ### HTTPS
 
-When `-https-addr` is set, V.A.L.E.T. loads the certificate and key at `-tls-cert`/`-tls-key` (defaults under `data/`). If either file is missing, it generates a self-signed certificate covering `localhost` and the machine's interface addresses and writes it to those paths. Browsers will warn on a self-signed certificate; replace the generated files with a real certificate to avoid the warning.
+V.A.L.E.T. loads the certificate and key at `-tls-cert`/`-tls-key` (defaults under `data/`). If either file is missing, it generates a self-signed certificate covering `localhost` and the machine's interface addresses and writes it to those paths. The kiosk Chromium process receives a certificate exception pinned to that certificate's public key, so the fresh kiosk profile can open the local HTTPS URL without weakening validation for other sites. Other browsers will still warn on a self-signed certificate; replace the generated files with a real certificate to avoid the warning.
 
 ## Running at boot
 
-Because configuration is passed as flags, the invocation is self-contained — nothing needs to be exported into the service's environment. A ready-to-edit systemd unit lives at [`deploy/valet-v2.service`](deploy/valet-v2.service); it runs kiosk mode, serves the LAN on `:80`/`:443`, and keeps the kiosk browser on the loopback listener. Install it with:
+Because configuration is passed as flags, the invocation is self-contained — nothing needs to be exported into the service's environment. A ready-to-edit systemd unit lives at [`deploy/valet-v2.service`](deploy/valet-v2.service); it runs kiosk mode and serves both the kiosk and LAN on `:443`. Install it with:
 
 ```sh
 sudo cp deploy/valet-v2.service /etc/systemd/system/

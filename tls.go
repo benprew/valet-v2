@@ -4,9 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -24,7 +26,7 @@ import (
 // will still warn because it is not signed by a trusted CA).
 func loadOrCreateTLSConfig(certPath, keyPath string) (*tls.Config, error) {
 	if certPath == "" || keyPath == "" {
-		return nil, fmt.Errorf("-tls-cert and -tls-key must be set when -https-addr is used")
+		return nil, fmt.Errorf("-tls-cert and -tls-key must be set")
 	}
 	if !fileExists(certPath) || !fileExists(keyPath) {
 		if err := generateSelfSignedCert(certPath, keyPath); err != nil {
@@ -40,6 +42,22 @@ func loadOrCreateTLSConfig(certPath, keyPath string) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
 	}, nil
+}
+
+// tlsCertificateSPKIHash returns Chromium's expected base64-encoded SHA-256
+// hash of the leaf certificate's SubjectPublicKeyInfo. Allowlisting this hash
+// bypasses errors only for the local certificate instead of disabling TLS
+// verification for the entire kiosk browser.
+func tlsCertificateSPKIHash(cfg *tls.Config) (string, error) {
+	if cfg == nil || len(cfg.Certificates) == 0 || len(cfg.Certificates[0].Certificate) == 0 {
+		return "", fmt.Errorf("TLS configuration has no leaf certificate")
+	}
+	cert, err := x509.ParseCertificate(cfg.Certificates[0].Certificate[0])
+	if err != nil {
+		return "", fmt.Errorf("parse TLS leaf certificate: %w", err)
+	}
+	hash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return base64.StdEncoding.EncodeToString(hash[:]), nil
 }
 
 func fileExists(path string) bool {

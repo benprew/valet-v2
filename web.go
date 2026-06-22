@@ -41,6 +41,7 @@ func (s *accountStore) routes() http.Handler {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /index.css", serveCSS)
 	mux.HandleFunc("GET /favicon.ico", serveFavicon)
+	mux.HandleFunc("GET "+kioskBootstrapPath, handleKioskBootstrap)
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /account", s.handleAccount)

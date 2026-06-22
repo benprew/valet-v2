@@ -10,12 +10,6 @@ import (
 	"testing"
 )
 
-func TestDefaultAddrBindsLocalhost(t *testing.T) {
-	if defaultAddr != "127.0.0.1:3000" {
-		t.Fatalf("defaultAddr should bind localhost, got %q", defaultAddr)
-	}
-}
-
 func TestAccountRequiresSession(t *testing.T) {
 	store := testStore(t)
 	response := httptest.NewRecorder()

@@ -12,19 +12,87 @@ import (
 	"time"
 )
 
-func TestKioskResetRequiresLoopbackRequest(t *testing.T) {
-	cfg := kioskConfig{Enabled: true}
+func TestKioskResetRequiresKioskCookie(t *testing.T) {
+	cfg := kioskConfig{Enabled: true, CookieToken: "kiosk-secret"}
 
 	local := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	local.RemoteAddr = "127.0.0.1:12345"
-	if err := cfg.validateResetRequest(local); err != nil {
-		t.Fatalf("expected local request to be allowed, got %v", err)
+	if err := cfg.validateResetRequest(local); err == nil {
+		t.Fatal("expected unauthenticated loopback request to be rejected")
 	}
 
 	remote := httptest.NewRequest(http.MethodPost, "/logout", nil)
 	remote.RemoteAddr = "192.0.2.1:12345"
 	if err := cfg.validateResetRequest(remote); err == nil {
-		t.Fatal("expected remote request to be rejected")
+		t.Fatal("expected unauthenticated remote request to be rejected")
+	}
+
+	remote.AddCookie(&http.Cookie{Name: kioskCookieName, Value: cfg.CookieToken})
+	if err := cfg.validateResetRequest(remote); err != nil {
+		t.Fatalf("expected authenticated kiosk request to be allowed, got %v", err)
+	}
+}
+
+func TestKioskBootstrapSetsAuthenticatedCookie(t *testing.T) {
+	setTestConfig(t, func(c *appConfig) {
+		c.Kiosk.Enabled = true
+		c.Kiosk.URL = "https://10.100.0.3/account?from=kiosk"
+		c.Kiosk.CookieToken = "kiosk-secret"
+	})
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "https://10.100.0.3"+kioskBootstrapPath+"?"+kioskTokenQuery+"=kiosk-secret", nil)
+	request.RemoteAddr = "192.0.2.1:12345"
+	handleKioskBootstrap(response, request)
+
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("expected bootstrap redirect, got %d", response.Code)
+	}
+	if location := response.Header().Get("Location"); location != "/account?from=kiosk" {
+		t.Fatalf("expected clean kiosk target, got %q", location)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("expected one kiosk cookie, got %#v", cookies)
+	}
+	cookie := cookies[0]
+	if cookie.Name != kioskCookieName || cookie.Value != "kiosk-secret" || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("unexpected kiosk cookie: %#v", cookie)
+	}
+	if got := response.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("expected token referrer protection, got %q", got)
+	}
+}
+
+func TestKioskBootstrapRejectsInvalidToken(t *testing.T) {
+	setTestConfig(t, func(c *appConfig) {
+		c.Kiosk.Enabled = true
+		c.Kiosk.CookieToken = "kiosk-secret"
+	})
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, kioskBootstrapPath+"?"+kioskTokenQuery+"=wrong", nil)
+	handleKioskBootstrap(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected invalid bootstrap token to be hidden, got %d", response.Code)
+	}
+	if cookies := response.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("expected no cookie, got %#v", cookies)
+	}
+}
+
+func TestKioskLaunchURLCarriesTokenWithoutConfiguredPath(t *testing.T) {
+	got, err := kioskLaunchURL(kioskConfig{
+		URL:         "https://10.100.0.3/account?from=config#section",
+		CookieToken: "kiosk secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://10.100.0.3" + kioskBootstrapPath + "?" + kioskTokenQuery + "=kiosk+secret"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
@@ -49,7 +117,8 @@ func TestEmbeddedKioskResetScriptRunsWithoutExternalPath(t *testing.T) {
 		Browser:        browser,
 		BrowserProfile: profileDir,
 		BrowserLog:     filepath.Join(dir, "browser.log"),
-		URL:            "http://127.0.0.1:3000",
+		URL:            "https://10.100.0.3",
+		CookieToken:    "kiosk-secret",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -78,6 +147,7 @@ func TestStartupTriggersEmbeddedKioskResetWhenKioskModeEnabled(t *testing.T) {
 	setTestConfig(t, func(c *appConfig) {
 		c.Kiosk.Enabled = true
 		c.Kiosk.ResetDelay = 0
+		c.Kiosk.CookieToken = "kiosk-secret"
 	})
 
 	resetConfigs := make(chan kioskConfig, 1)
@@ -93,9 +163,6 @@ func TestStartupTriggersEmbeddedKioskResetWhenKioskModeEnabled(t *testing.T) {
 	case cfg := <-resetConfigs:
 		if !cfg.Enabled {
 			t.Fatal("expected kiosk mode to be enabled")
-		}
-		if cfg.ResetCommand != "" {
-			t.Fatalf("expected embedded reset script, got command %q", cfg.ResetCommand)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for startup kiosk reset")
@@ -128,6 +195,7 @@ func TestLogoutTriggersEmbeddedKioskResetForLocalKioskRequest(t *testing.T) {
 	setTestConfig(t, func(c *appConfig) {
 		c.Kiosk.Enabled = true
 		c.Kiosk.ResetDelay = 0
+		c.Kiosk.CookieToken = "kiosk-secret"
 	})
 
 	resetConfigs := make(chan kioskConfig, 1)
@@ -153,16 +221,14 @@ func TestLogoutTriggersEmbeddedKioskResetForLocalKioskRequest(t *testing.T) {
 	logoutRequest := formRequest(http.MethodPost, "/logout", url.Values{csrfFormField: {current.CSRFToken}})
 	logoutRequest.RemoteAddr = "127.0.0.1:12345"
 	logoutRequest.AddCookie(cookie)
+	logoutRequest.AddCookie(&http.Cookie{Name: kioskCookieName, Value: "kiosk-secret"})
 	handler.ServeHTTP(logoutResponse, logoutRequest)
 
 	if logoutResponse.Code != http.StatusSeeOther {
 		t.Fatalf("expected logout redirect, got %d", logoutResponse.Code)
 	}
 	select {
-	case cfg := <-resetConfigs:
-		if cfg.ResetCommand != "" {
-			t.Fatalf("expected embedded reset script, got command %q", cfg.ResetCommand)
-		}
+	case <-resetConfigs:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for kiosk reset")
 	}
@@ -207,7 +273,47 @@ func TestLogoutDoesNotTriggerKioskResetForRemoteRequest(t *testing.T) {
 	}
 }
 
-func TestOAuthMismatchTriggersKioskResetForLocalKioskRequest(t *testing.T) {
+func TestLogoutTriggersKioskResetForAuthenticatedRemoteKiosk(t *testing.T) {
+	setTestConfig(t, func(c *appConfig) {
+		c.Kiosk.Enabled = true
+		c.Kiosk.ResetDelay = 0
+		c.Kiosk.CookieToken = "kiosk-secret"
+	})
+
+	resetConfigs := make(chan kioskConfig, 1)
+	restoreRunner := replaceKioskResetRunnerForTest(func(_ context.Context, cfg kioskConfig) error {
+		resetConfigs <- cfg
+		return nil
+	})
+	defer restoreRunner()
+
+	const email = "ben@example.com"
+	store := testStore(t)
+	handler := store.routes()
+
+	loginResponse := httptest.NewRecorder()
+	handler.ServeHTTP(loginResponse, formRequest(http.MethodPost, "/login", url.Values{"email": {email}}))
+	sessionCookie := sessionCookie(t, loginResponse.Result())
+	current := storedSession(t, store, sessionCookie.Value)
+
+	logoutResponse := httptest.NewRecorder()
+	logoutRequest := formRequest(http.MethodPost, "/logout", url.Values{csrfFormField: {current.CSRFToken}})
+	logoutRequest.RemoteAddr = "192.0.2.1:12345"
+	logoutRequest.AddCookie(sessionCookie)
+	logoutRequest.AddCookie(&http.Cookie{Name: kioskCookieName, Value: "kiosk-secret"})
+	handler.ServeHTTP(logoutResponse, logoutRequest)
+
+	if logoutResponse.Code != http.StatusSeeOther {
+		t.Fatalf("expected logout redirect, got %d", logoutResponse.Code)
+	}
+	select {
+	case <-resetConfigs:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for kiosk reset")
+	}
+}
+
+func TestOAuthMismatchTriggersKioskResetForAuthenticatedKiosk(t *testing.T) {
 	const (
 		claimedEmail       = "claimed@example.com"
 		authenticatedEmail = "actual@example.com"
@@ -216,6 +322,7 @@ func TestOAuthMismatchTriggersKioskResetForLocalKioskRequest(t *testing.T) {
 	setTestConfig(t, func(c *appConfig) {
 		c.Kiosk.Enabled = true
 		c.Kiosk.ResetDelay = 0
+		c.Kiosk.CookieToken = "kiosk-secret"
 	})
 
 	resetConfigs := make(chan kioskConfig, 1)
@@ -265,17 +372,15 @@ func TestOAuthMismatchTriggersKioskResetForLocalKioskRequest(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/login/complete?state="+url.QueryEscape(state)+"&code=auth-code", nil)
-	request.RemoteAddr = "127.0.0.1:12345"
+	request.RemoteAddr = "192.0.2.1:12345"
+	request.AddCookie(&http.Cookie{Name: kioskCookieName, Value: "kiosk-secret"})
 	store.routes().ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected mismatch page, got %d", response.Code)
 	}
 	select {
-	case cfg := <-resetConfigs:
-		if cfg.ResetCommand != "" {
-			t.Fatalf("expected embedded reset script, got command %q", cfg.ResetCommand)
-		}
+	case <-resetConfigs:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for kiosk reset")
 	}

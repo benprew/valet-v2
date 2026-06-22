@@ -21,9 +21,6 @@ var (
 )
 
 type appConfig struct {
-	Addr        string
-	HTTPAddr    string
-	HTTPSAddr   string
 	TLSCertPath string
 	TLSKeyPath  string
 	DataPath    string
@@ -46,7 +43,6 @@ var conf = defaultConfig()
 
 func defaultConfig() appConfig {
 	return appConfig{
-		Addr:             defaultAddr,
 		TLSCertPath:      filepath.Join("data", "tls-cert.pem"),
 		TLSKeyPath:       filepath.Join("data", "tls-key.pem"),
 		DataPath:         filepath.Join("data", "accounts.db"),
@@ -65,11 +61,8 @@ func defaultConfig() appConfig {
 }
 
 func parseFlags() {
-	flag.StringVar(&conf.Addr, "addr", conf.Addr, "loopback address the kiosk browser connects to (empty disables)")
-	flag.StringVar(&conf.HTTPAddr, "http-addr", conf.HTTPAddr, "additional plain HTTP address to listen on, e.g. :80 (empty disables)")
-	flag.StringVar(&conf.HTTPSAddr, "https-addr", conf.HTTPSAddr, "HTTPS address to listen on, e.g. :443 (empty disables)")
-	flag.StringVar(&conf.TLSCertPath, "tls-cert", conf.TLSCertPath, "TLS certificate file used for -https-addr; a self-signed cert is generated here if missing")
-	flag.StringVar(&conf.TLSKeyPath, "tls-key", conf.TLSKeyPath, "TLS private key file used for -https-addr; generated alongside -tls-cert if missing")
+	flag.StringVar(&conf.TLSCertPath, "tls-cert", conf.TLSCertPath, "TLS certificate file; a self-signed cert is generated here if missing")
+	flag.StringVar(&conf.TLSKeyPath, "tls-key", conf.TLSKeyPath, "TLS private key file; generated alongside -tls-cert if missing")
 	flag.StringVar(&conf.DataPath, "data", conf.DataPath, "path to the SQLite data file")
 	flag.StringVar(&conf.RCBaseURL, "rc-base-url", conf.RCBaseURL, "base URL for Recurse Center OAuth and API requests")
 
@@ -85,7 +78,6 @@ func parseFlags() {
 	flag.DurationVar(&conf.HubScanTimeout, "hub-scan-timeout", conf.HubScanTimeout, "timeout for a local device scan")
 
 	flag.BoolVar(&conf.Kiosk.Enabled, "kiosk", false, "enable kiosk mode")
-	flag.StringVar(&conf.Kiosk.ResetCommand, "kiosk-reset-command", "", "shell command that overrides the embedded kiosk reset script")
 	flag.DurationVar(&conf.Kiosk.ResetDelay, "kiosk-reset-delay", conf.Kiosk.ResetDelay, "delay before running a kiosk reset")
 	flag.DurationVar(&conf.Kiosk.ResetTimeout, "kiosk-reset-timeout", conf.Kiosk.ResetTimeout, "timeout for the kiosk reset command")
 	flag.StringVar(&conf.Kiosk.URL, "kiosk-url", conf.Kiosk.URL, "URL the kiosk browser opens")

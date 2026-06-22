@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	_ "embed"
 	"errors"
+	"fmt"
 	"log"
-	"net"
 	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -15,12 +17,15 @@ import (
 const (
 	defaultKioskResetDelay     = 250 * time.Millisecond
 	defaultKioskResetTimeout   = 15 * time.Second
-	defaultKioskURL            = "http://127.0.0.1:3000"
+	defaultKioskURL            = "https://10.100.0.3"
 	defaultKioskBrowser        = "chromium-browser"
 	defaultKioskBrowserProfile = "/tmp/valet-kiosk-browser"
 	defaultKioskBrowserLog     = "/tmp/valet-kiosk-browser.log"
 
 	kioskWatchdogInterval = 2500 * time.Millisecond
+	kioskCookieName       = "valet_kiosk"
+	kioskBootstrapPath    = "/kiosk/start"
+	kioskTokenQuery       = "token"
 )
 
 //go:embed scripts/valet-kiosk-reset.sh
@@ -28,16 +33,49 @@ var embeddedKioskResetScript string
 
 type kioskConfig struct {
 	Enabled        bool
-	ResetCommand   string
 	ResetDelay     time.Duration
 	ResetTimeout   time.Duration
 	URL            string
 	Browser        string
 	BrowserProfile string
 	BrowserLog     string
+	CookieToken    string
+	TLSCertSPKI    string
 }
 
 var runKioskResetFunc = runKioskReset
+
+func initializeKioskAuth() error {
+	if !conf.Kiosk.Enabled {
+		return nil
+	}
+	token, err := randomState()
+	if err != nil {
+		return err
+	}
+	conf.Kiosk.CookieToken = token
+	return nil
+}
+
+func handleKioskBootstrap(w http.ResponseWriter, r *http.Request) {
+	cfg := conf.Kiosk
+	if !cfg.Enabled || !tokensEqual(r.URL.Query().Get(kioskTokenQuery), cfg.CookieToken) {
+		http.NotFound(w, r)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     kioskCookieName,
+		Value:    cfg.CookieToken,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	http.Redirect(w, r, kioskRedirectTarget(cfg.URL), http.StatusSeeOther)
+}
 
 func scheduleKioskResetAfterResponse(r *http.Request, reason string) {
 	cfg := conf.Kiosk
@@ -118,36 +156,68 @@ func (c kioskConfig) validateResetRequest(r *http.Request) error {
 	if !c.Enabled {
 		return errors.New("kiosk mode is disabled")
 	}
-	if !requestIsFromLoopback(r) {
-		return errors.New("request is not from loopback")
+	if !c.requestHasKioskCookie(r) {
+		return errors.New("request is not from an authenticated kiosk browser")
 	}
 	return nil
 }
 
-func requestIsFromLoopback(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+func (c kioskConfig) requestHasKioskCookie(r *http.Request) bool {
+	cookie, err := r.Cookie(kioskCookieName)
+	return err == nil && tokensEqual(cookie.Value, c.CookieToken)
 }
 
-// The reset script receives the browser settings as positional arguments:
-// $1 profile directory, $2 URL, $3 browser executable, $4 browser log file.
-// A custom -kiosk-reset-command gets the same arguments.
-func runKioskReset(ctx context.Context, cfg kioskConfig) error {
-	args := []string{cfg.BrowserProfile, cfg.URL, cfg.Browser, cfg.BrowserLog}
-	if cfg.ResetCommand != "" {
-		return runKioskResetCommand(exec.CommandContext(ctx, "sh", append([]string{"-c", cfg.ResetCommand, "valet-kiosk-reset"}, args...)...))
+func tokensEqual(left, right string) bool {
+	if left == "" || right == "" {
+		return false
 	}
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
 
+func runKioskReset(ctx context.Context, cfg kioskConfig) error {
+	launchURL, err := kioskLaunchURL(cfg)
+	if err != nil {
+		return err
+	}
+	args := []string{cfg.BrowserProfile, launchURL, cfg.Browser, cfg.BrowserLog, cfg.TLSCertSPKI}
 	cmd := exec.CommandContext(ctx, "sh", append([]string{"-s", "--"}, args...)...)
 	cmd.Stdin = strings.NewReader(embeddedKioskResetScript)
-	return runKioskResetCommand(cmd)
+	return runEmbeddedKioskReset(cmd)
 }
 
-func runKioskResetCommand(cmd *exec.Cmd) error {
+func kioskLaunchURL(cfg kioskConfig) (string, error) {
+	if cfg.CookieToken == "" {
+		return "", errors.New("kiosk cookie token is not initialized")
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return "", fmt.Errorf("parse kiosk URL: %w", err)
+	}
+	if !u.IsAbs() || u.Host == "" {
+		return "", errors.New("kiosk URL must be absolute")
+	}
+	u.Path = kioskBootstrapPath
+	u.RawPath = ""
+	u.RawQuery = url.Values{kioskTokenQuery: {cfg.CookieToken}}.Encode()
+	u.Fragment = ""
+	return u.String(), nil
+}
+
+func kioskRedirectTarget(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "/"
+	}
+	u.Scheme = ""
+	u.Host = ""
+	u.User = nil
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	return u.String()
+}
+
+func runEmbeddedKioskReset(cmd *exec.Cmd) error {
 	output, err := cmd.CombinedOutput()
 	if len(output) > 0 {
 		log.Printf("kiosk reset command output: %s", strings.TrimSpace(string(output)))
