@@ -62,6 +62,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now valet-v2.service
 ```
 
+For the configured kiosk at `pirc@10.100.0.3`, build and deploy with:
+
+```sh
+make build
+./deploy/deploy.sh
+```
+
+The deploy script installs the binary and unit, reloads systemd, and restarts
+the service (or enables and starts it on the first deployment).
+
 The unit grants `CAP_NET_BIND_SERVICE` so the non-root service can bind `:80`/`:443`, plus `CAP_NET_RAW`/`CAP_NET_ADMIN` for `arp-scan`. Because the kiosk reset launches a browser, the service must reach a graphical session — set `DISPLAY`/`XAUTHORITY` (and, on Wayland, `WAYLAND_DISPLAY`) to match the logged-in seat. See valet-kiosk-reset.sh for local browser reset details.
 
 ## OAuth setup
