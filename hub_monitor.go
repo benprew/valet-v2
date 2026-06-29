@@ -78,9 +78,9 @@ func (s *accountStore) runHubMonitorOnce(ctx context.Context, client *hubVisitCl
 		return err
 	}
 
-	seenMACs := map[string]struct{}{}
+	seenDevices := map[string][]networkDevice{}
 	for _, device := range devices {
-		seenMACs[device.MAC] = struct{}{}
+		seenDevices[device.MAC] = append(seenDevices[device.MAC], device)
 	}
 
 	assignments, err := s.macAssignments()
@@ -95,7 +95,8 @@ func (s *accountStore) runHubMonitorOnce(ctx context.Context, client *hubVisitCl
 			log.Printf("hub monitor skipping %s: assigned to multiple emails", mac)
 			continue
 		}
-		if _, seen := seenMACs[mac]; !seen {
+		candidates, seen := seenDevices[mac]
+		if !seen {
 			continue
 		}
 		if s.lastHubVisit(email) == today {
@@ -103,6 +104,19 @@ func (s *accountStore) runHubMonitorOnce(ctx context.Context, client *hubVisitCl
 		}
 		if !s.hasToken(email) {
 			continue
+		}
+		// Unless a fresh REACHABLE neighbor proves it, actively probe to
+		// confirm the device hasn't left behind a STALE entry.
+		if !hasStrongPresence(candidates) {
+			present, err := verifyDevicePresentFunc(ctx, candidates)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("verify %s for %s: %w", mac, email, err))
+				continue
+			}
+			if !present {
+				log.Printf("hub monitor skipping %s: %s did not answer ARP probe (stale neighbor entry)", email, mac)
+				continue
+			}
 		}
 		if err := s.markEmailInHub(ctx, client, email, today); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", email, err))

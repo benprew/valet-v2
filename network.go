@@ -200,6 +200,55 @@ func isUsableNeighbor(device networkDevice) bool {
 	return state != "FAILED" && state != "INCOMPLETE"
 }
 
+// A var so the hub monitor tests can stub probing.
+var verifyDevicePresentFunc = verifyDevicePresent
+
+// hasStrongPresence reports whether any device is recent enough to trust without
+// an active probe. STALE neighbor entries and arp-scan cache rows can linger
+// long after a device has left, but a REACHABLE ip-neigh entry was just
+// confirmed by the kernel.
+func hasStrongPresence(devices []networkDevice) bool {
+	for _, device := range devices {
+		if device.Source == "ip-neigh" && strings.EqualFold(device.State, "REACHABLE") {
+			return true
+		}
+	}
+	return false
+}
+
+// verifyDevicePresent ARP-probes the device's IPv4 and reports whether it
+// answers. ARP rather than ICMP because iOS/Android drop ping behind a firewall
+// or while power-saving, yet answer ARP from Wi-Fi firmware even while idle. A
+// non-nil error means the probe could not run; callers decline to mark present.
+func verifyDevicePresent(ctx context.Context, devices []networkDevice) (bool, error) {
+	probed := false
+	for _, device := range devices {
+		ip := net.ParseIP(device.IP)
+		if ip == nil || ip.To4() == nil {
+			continue // arp-scan is IPv4 only
+		}
+		probed = true
+
+		args := []string{"--quiet", "--plain", "--numeric"}
+		if device.Interface != "" {
+			args = append(args, "--interface="+device.Interface)
+		}
+		args = append(args, device.IP)
+
+		out, err := exec.CommandContext(ctx, arpScanPath(), args...).Output()
+		if err != nil {
+			return false, err
+		}
+		if len(bytes.TrimSpace(out)) > 0 {
+			return true, nil
+		}
+	}
+	if !probed {
+		return false, fmt.Errorf("no IPv4 address to ARP-probe")
+	}
+	return false, nil
+}
+
 func isMACAddress(value string) bool {
 	_, err := net.ParseMAC(value)
 	return err == nil

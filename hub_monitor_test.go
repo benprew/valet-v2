@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -56,7 +57,7 @@ func TestHubMonitorMarksSeenRegisteredMACInHubOncePerDay(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
+	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac, Source: "ip-neigh", State: "REACHABLE"}})
 	defer restoreScanner()
 
 	path := filepath.Join(t.TempDir(), "accounts.db")
@@ -192,7 +193,7 @@ func TestHubMonitorRefreshesOAuthAccessToken(t *testing.T) {
 		c.OAuthTokenURL = server.URL + "/oauth/token"
 	})
 
-	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac}})
+	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac, Source: "ip-neigh", State: "REACHABLE"}})
 	defer restoreScanner()
 
 	store := testStore(t)
@@ -340,6 +341,197 @@ func TestHubMonitorSkipsMACWithoutToken(t *testing.T) {
 	}
 	if requests != 0 {
 		t.Fatalf("expected no RC API requests without a token, got %d", requests)
+	}
+}
+
+func TestHubMonitorVerifiesStaleNeighborBeforeMarking(t *testing.T) {
+	const (
+		email = "ben@example.com"
+		mac   = "82:00:3b:d0:93:12"
+		date  = "2026-06-08"
+	)
+
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/profiles":
+			_ = json.NewEncoder(w).Encode([]map[string]int{{"id": 123}})
+		case "/api/v1/hub_visits/123/" + date:
+			patches++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// A STALE neighbor entry is only a candidate; an ARP probe must confirm it.
+	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac, Source: "ip-neigh", State: "STALE"}})
+	defer restoreScanner()
+
+	probed := 0
+	restoreVerify := replaceVerifyForTest(t, func(_ context.Context, devices []networkDevice) (bool, error) {
+		probed++
+		if len(devices) != 1 || devices[0].IP != "10.0.0.2" {
+			t.Errorf("verify got unexpected devices: %#v", devices)
+		}
+		return true, nil
+	})
+	defer restoreVerify()
+
+	store := testStore(t)
+	addAccountMAC(t, store, email, mac)
+	if err := store.saveToken(email, token{Type: tokenTypePAT, RefreshToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	client := newHubVisitClient(hubMonitorConfig{BaseURL: server.URL})
+
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	if err := store.runHubMonitorOnce(context.Background(), client, now); err != nil {
+		t.Fatalf("monitor run failed: %v", err)
+	}
+	if probed != 1 {
+		t.Fatalf("expected one ARP verification, got %d", probed)
+	}
+	if patches != 1 {
+		t.Fatalf("expected one hub visit PATCH after verification, got %d", patches)
+	}
+}
+
+func TestHubMonitorSkipsStaleNeighborThatDoesNotAnswerProbe(t *testing.T) {
+	const (
+		email = "ben@example.com"
+		mac   = "82:00:3b:d0:93:12"
+	)
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac, Source: "ip-neigh", State: "STALE"}})
+	defer restoreScanner()
+
+	restoreVerify := replaceVerifyForTest(t, func(context.Context, []networkDevice) (bool, error) {
+		return false, nil // device has left; the STALE entry is a ghost
+	})
+	defer restoreVerify()
+
+	store := testStore(t)
+	addAccountMAC(t, store, email, mac)
+	if err := store.saveToken(email, token{Type: tokenTypePAT, RefreshToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	client := newHubVisitClient(hubMonitorConfig{BaseURL: server.URL})
+
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	if err := store.runHubMonitorOnce(context.Background(), client, now); err != nil {
+		t.Fatalf("monitor run failed: %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("expected no RC API requests when probe fails, got %d", requests)
+	}
+	if got := store.lastHubVisit(email); got != "" {
+		t.Fatalf("expected no hub visit recorded, got %q", got)
+	}
+}
+
+func TestHubMonitorFailsClosedWhenProbeErrors(t *testing.T) {
+	const (
+		email = "ben@example.com"
+		mac   = "82:00:3b:d0:93:12"
+	)
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac, Source: "ip-neigh", State: "STALE"}})
+	defer restoreScanner()
+
+	restoreVerify := replaceVerifyForTest(t, func(context.Context, []networkDevice) (bool, error) {
+		return false, errors.New("arp-scan unavailable")
+	})
+	defer restoreVerify()
+
+	store := testStore(t)
+	addAccountMAC(t, store, email, mac)
+	if err := store.saveToken(email, token{Type: tokenTypePAT, RefreshToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	client := newHubVisitClient(hubMonitorConfig{BaseURL: server.URL})
+
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	err := store.runHubMonitorOnce(context.Background(), client, now)
+	if err == nil {
+		t.Fatal("expected probe error to surface from monitor run")
+	}
+	if requests != 0 {
+		t.Fatalf("expected no RC API requests when probe errors, got %d", requests)
+	}
+	if got := store.lastHubVisit(email); got != "" {
+		t.Fatalf("expected no hub visit recorded, got %q", got)
+	}
+}
+
+func TestHubMonitorSkipsProbeForReachableNeighbor(t *testing.T) {
+	const (
+		email = "ben@example.com"
+		mac   = "82:00:3b:d0:93:12"
+		date  = "2026-06-08"
+	)
+
+	patches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/profiles":
+			_ = json.NewEncoder(w).Encode([]map[string]int{{"id": 123}})
+		case "/api/v1/hub_visits/123/" + date:
+			patches++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	restoreScanner := replaceScannerForTest(t, []networkDevice{{IP: "10.0.0.2", MAC: mac, Source: "ip-neigh", State: "REACHABLE"}})
+	defer restoreScanner()
+
+	restoreVerify := replaceVerifyForTest(t, func(context.Context, []networkDevice) (bool, error) {
+		t.Fatal("REACHABLE neighbor should not be ARP-probed")
+		return false, nil
+	})
+	defer restoreVerify()
+
+	store := testStore(t)
+	addAccountMAC(t, store, email, mac)
+	if err := store.saveToken(email, token{Type: tokenTypePAT, RefreshToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+	client := newHubVisitClient(hubMonitorConfig{BaseURL: server.URL})
+
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	if err := store.runHubMonitorOnce(context.Background(), client, now); err != nil {
+		t.Fatalf("monitor run failed: %v", err)
+	}
+	if patches != 1 {
+		t.Fatalf("expected one hub visit PATCH for reachable neighbor, got %d", patches)
+	}
+}
+
+func replaceVerifyForTest(t *testing.T, replacement func(context.Context, []networkDevice) (bool, error)) func() {
+	t.Helper()
+
+	original := verifyDevicePresentFunc
+	verifyDevicePresentFunc = replacement
+	return func() {
+		verifyDevicePresentFunc = original
 	}
 }
 

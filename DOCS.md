@@ -10,6 +10,15 @@ The hub monitor passively monitors local network devices by using `ip neigh`. It
 -hub-scan-timeout "6m"
 ```
 
+### Presence verification
+
+`ip neigh` keeps `STALE` neighbor entries (and the `arp-scan` cache can be up to ~20 minutes old), so a registered device showing up in a scan does not prove it is still on the network. Before marking someone in the Hub, the monitor confirms the device is actually present:
+
+- If there is a fresh `REACHABLE` `ip neigh` entry, that is trusted directly — no extra probe.
+- Otherwise the monitor sends a targeted ARP request to the device's IPv4 address (a single-target `arp-scan`, reusing the same binary and `CAP_NET_RAW`) and only marks the device present if it answers. ARP is used because iPhones and Androids frequently drop ICMP behind a firewall or while power-saving, yet still answer ARP (often from Wi-Fi firmware) while idle.
+
+Verification is fail-closed: if the probe cannot run (e.g. `arp-scan` missing, unprivileged, no IPv4 address, or a timeout) the device is not marked, and the error is reported in the scan log.
+
 ## Listening addresses
 
 V.A.L.E.T. always listens on two addresses, both serving the same app:

@@ -189,6 +189,89 @@ func TestMergeNetworkDevicesDeduplicatesIPMACPairs(t *testing.T) {
 	}
 }
 
+func TestHasStrongPresenceOnlyTrustsReachableNeighbor(t *testing.T) {
+	cases := []struct {
+		name    string
+		devices []networkDevice
+		want    bool
+	}{
+		{"reachable ip-neigh", []networkDevice{{Source: "ip-neigh", State: "REACHABLE"}}, true},
+		{"reachable mixed case", []networkDevice{{Source: "ip-neigh", State: "reachable"}}, true},
+		{"stale ip-neigh", []networkDevice{{Source: "ip-neigh", State: "STALE"}}, false},
+		{"arp-scan cache", []networkDevice{{Source: "arp-scan"}}, false},
+		{"reachable but arp-scan source", []networkDevice{{Source: "arp-scan", State: "REACHABLE"}}, false},
+		{"any reachable wins", []networkDevice{{Source: "ip-neigh", State: "STALE"}, {Source: "ip-neigh", State: "REACHABLE"}}, true},
+		{"none", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasStrongPresence(tc.devices); got != tc.want {
+				t.Fatalf("hasStrongPresence(%#v) = %v, want %v", tc.devices, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyDevicePresentConfirmsWhenTargetAnswers(t *testing.T) {
+	fakeArpScan(t, "echo '10.0.0.2 82:00:3b:d0:93:12'\n")
+
+	present, err := verifyDevicePresent(context.Background(), []networkDevice{
+		{IP: "10.0.0.2", Interface: "wlan0"},
+	})
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	if !present {
+		t.Fatal("expected device to verify as present")
+	}
+}
+
+func TestVerifyDevicePresentReportsAbsentWhenNoAnswer(t *testing.T) {
+	fakeArpScan(t, "exit 0\n") // ran fine, but nothing answered
+
+	present, err := verifyDevicePresent(context.Background(), []networkDevice{
+		{IP: "10.0.0.2"},
+	})
+	if err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+	if present {
+		t.Fatal("expected device to be absent when nothing answers")
+	}
+}
+
+func TestVerifyDevicePresentErrorsWithoutIPv4(t *testing.T) {
+	fakeArpScan(t, "echo should-not-run; exit 1\n")
+
+	if _, err := verifyDevicePresent(context.Background(), []networkDevice{
+		{IP: "fe80::1"},
+	}); err == nil {
+		t.Fatal("expected error when no IPv4 address is available to probe")
+	}
+}
+
+func TestVerifyDevicePresentPropagatesProbeError(t *testing.T) {
+	fakeArpScan(t, "exit 1\n")
+
+	if _, err := verifyDevicePresent(context.Background(), []networkDevice{
+		{IP: "10.0.0.2"},
+	}); err == nil {
+		t.Fatal("expected probe error to propagate")
+	}
+}
+
+// fakeArpScan puts a stub arp-scan with the given shell body on PATH.
+func fakeArpScan(t *testing.T, body string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "arp-scan")
+	if err := os.WriteFile(bin, []byte("#!/usr/bin/env sh\n"+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func replaceARPScanForTest(t *testing.T, replacement func(context.Context) ([]networkDevice, error)) func() {
 	t.Helper()
 
