@@ -66,6 +66,22 @@ func TestOAuthConfigUsesRCBaseURL(t *testing.T) {
 	}
 }
 
+func TestOAuthConfigStripsCredentialQuotes(t *testing.T) {
+	setTestConfig(t, func(c *appConfig) {
+		c.OAuthClientID = `"client-id"`
+		c.OAuthClientSecret = `'client-secret'`
+	})
+
+	cfg := oauthConfigFromRequest(nil)
+
+	if cfg.ClientID != "client-id" {
+		t.Fatalf("unexpected client ID: %q", cfg.ClientID)
+	}
+	if cfg.ClientSecret != "client-secret" {
+		t.Fatalf("unexpected client secret: %q", cfg.ClientSecret)
+	}
+}
+
 func TestOAuthExchangeCodeReturnsToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

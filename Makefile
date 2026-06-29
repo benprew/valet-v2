@@ -20,6 +20,8 @@ build:
 	@secrets=$$(age -d secrets.age); \
 	id=$$(grep "^CLIENT_ID=" <<<"$$secrets" | cut -d= -f2-); \
 	secret=$$(grep "^CLIENT_SECRET=" <<<"$$secrets" | cut -d= -f2-); \
+	if [[ "$$id" == \"*\" ]] || [[ "$$id" == \'*\' ]]; then id=$${id:1:$${#id}-2}; fi; \
+	if [[ "$$secret" == \"*\" ]] || [[ "$$secret" == \'*\' ]]; then secret=$${secret:1:$${#secret}-2}; fi; \
 	if [ -z "$$id" ] || [ -z "$$secret" ]; then \
 		echo "make build: secrets.age did not yield CLIENT_ID and CLIENT_SECRET" >&2; \
 		exit 1; \

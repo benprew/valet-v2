@@ -55,8 +55,8 @@ func oauthConfigFromRequest(r *http.Request) oauthConfig {
 	}
 
 	cfg := oauthConfig{
-		ClientID:     conf.OAuthClientID,
-		ClientSecret: conf.OAuthClientSecret,
+		ClientID:     normalizeOAuthCredential(conf.OAuthClientID),
+		ClientSecret: normalizeOAuthCredential(conf.OAuthClientSecret),
 		AuthorizeURL: strings.TrimSpace(conf.OAuthAuthorizeURL),
 		TokenURL:     strings.TrimSpace(conf.OAuthTokenURL),
 		RedirectURL:  redirectURL,
@@ -69,6 +69,20 @@ func oauthConfigFromRequest(r *http.Request) oauthConfig {
 		cfg.TokenURL = rcBaseURL() + "/oauth/token"
 	}
 	return cfg
+}
+
+// normalizeOAuthCredential accepts values copied from a dotenv-style file,
+// where credentials are commonly surrounded by quotes. Those quotes are file
+// syntax and must not be sent to the OAuth server as part of the credential.
+func normalizeOAuthCredential(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) >= 2 {
+		first, last := value[0], value[len(value)-1]
+		if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
 }
 
 func (c oauthConfig) configured() bool {
